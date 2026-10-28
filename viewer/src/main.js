@@ -3,6 +3,7 @@ import { SplatView } from "./SplatView.js";
 import { AnnotationParser } from "./AnnotationParser.js";
 import { AnnotationLayer } from "./AnnotationLayer.js";
 import { SettingsMenu } from "./SettingsMenu.js";
+import { SceneUnderstanding } from "./SceneUnderstanding.js";
 
 const configuration = await fetch(new URL('../viewer-config.json', import.meta.url))
   .then(response => response.ok ? response.json() : {scene: null})
@@ -28,10 +29,30 @@ let loadedAnnotations = [];
 let showContents = false;
 let sourceHash = null;
 let lastCamera = null;
+let selectedIds = null;
+const understanding = new SceneUnderstanding({
+  onBusy: busy => settingsMenu.setBusy(busy),
+  onSelection: (ids, index) => {
+    selectedIds = ids === null ? null : new Set(ids);
+    const descriptions = new Map((index?.objects || []).map(object => [object.id, object]));
+    for (const annotation of loadedAnnotations) annotation.label = descriptions.get(annotation.id)?.display_name || annotation.originalLabel;
+    displayAnnotations();
+  },
+  onView: (camera, ids) => {
+    selectedIds = ids === null ? null : new Set(ids);
+    displayAnnotations();
+    sceneManager.navigationTouched = false;
+    applyCamera(camera);
+    sceneManager.renderer.domElement.focus({preventScroll:true});
+  },
+});
 
 function displayAnnotations(annotations = loadedAnnotations) {
   loadedAnnotations = annotations;
-  annotationLayer.rebuild(annotations.filter(a => showContents || !a.parentId));
+  for (const annotation of annotations) annotation.selected = selectedIds !== null && selectedIds.has(annotation.id);
+  splatView.clearHighlight();
+  annotationLayer.rebuild(annotations.filter(a => selectedIds !== null ? selectedIds.has(a.id) : (showContents || !a.parentId)));
+  if (selectedIds !== null) for (const object of annotationLayer.objects) object.box.show();
 }
 function showStatus(title, detail = '', state = 'running', completed = null, total = null) {
   status.classList.remove('hidden');
@@ -68,6 +89,8 @@ function loaderOptions(gen) {
 }
 function resetScene() {
   generation += 1;
+  understanding.reset();
+  selectedIds = null;
   splatView.clear();
   loadedAnnotations = [];
   annotationLayer.clear();
@@ -81,7 +104,7 @@ function applyCamera(camera) {
   if (!camera || sceneManager.navigationTouched) return;
   sceneManager.camera.position.fromArray(camera.position);
   sceneManager.controls.target.fromArray(camera.target);
-  sceneManager.camera.fov = 90;
+  sceneManager.camera.fov = camera.fov || 90;
   sceneManager.camera.near = .01;
   sceneManager.camera.far = 1000;
   sceneManager.camera.updateProjectionMatrix();
@@ -103,6 +126,7 @@ async function loadPair(pair, gen, keepScene = false) {
   applyCamera(pair.camera);
   annotationLayer.playReveal();
   hideLoading();
+  if (configuration.understandingAvailable) understanding.setScene({...pair, sourceHash});
   return result;
 }
 async function loadExample(id) {
@@ -194,7 +218,7 @@ async function analyzeFile(file) {
   } catch (error) {
     if (gen === generation) { hideLoading(); showStatus('Analysis failed', error.message, 'failed'); }
   } finally {
-    if (gen === generation) settingsMenu.setBusy(false);
+    if (gen === generation) settingsMenu.setBusy(understanding.busy);
   }
 }
 const settingsMenu = new SettingsMenu({
@@ -206,6 +230,8 @@ const settingsMenu = new SettingsMenu({
     try {
       const result = JSON.parse(await file.text());
       if (sourceHash && result.input?.sha256 && sourceHash !== result.input.sha256) throw new Error('These annotations belong to a different scene.');
+      understanding.reset();
+      selectedIds = null;
       displayAnnotations(AnnotationParser.fromText(JSON.stringify(result)));
     } catch (error) { showStatus('Annotations could not be loaded', error.message, 'failed'); }
   },
@@ -244,5 +270,5 @@ if (configuration.activeJob) {
     if (job.splatUrl) showLoading('Loading scene…');
     await pollJob(configuration.activeJob, gen, ready);
   } catch (error) { showStatus('Analysis failed', error.message, 'failed'); }
-  finally { settingsMenu.setBusy(false); }
+  finally { settingsMenu.setBusy(understanding.busy); }
 } else if (EXAMPLES.length) loadExample(EXAMPLES[0].id);

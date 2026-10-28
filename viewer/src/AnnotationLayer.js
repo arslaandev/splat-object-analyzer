@@ -125,7 +125,7 @@ export class AnnotationLayer {
       // Check if this marker's center falls inside a visible box that isn't its own.
       let hiddenByBox = false;
       for (const br of boxRects) {
-        if (br.owner === obj) continue;
+        if (br.owner === obj || obj.annotation.selected) continue;
         if (screenX >= br.minX && screenX <= br.maxX &&
             screenY >= br.minY && screenY <= br.maxY) {
           hiddenByBox = true;

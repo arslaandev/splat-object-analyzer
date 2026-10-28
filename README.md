@@ -124,10 +124,77 @@ For a GCP VM, forward the port over SSH and run the same viewer command on the V
 ssh -L 8088:127.0.0.1:8088 USER@VM
 ```
 
+## Explore a scene with a prompt
+
+After an analyzed scene loads in the viewer, **Explore this scene** builds a local
+scene-understanding index automatically. Enter a request such as “show off my desk
+setup,” “show around my bedroom,” or “find the wall art.” The viewer highlights the
+selected object IDs, lists the subjects, and offers up to three suggested views.
+Click a preview to move to that saved camera. **Show all labels** restores the full
+inventory. Groups are clickable prompt shortcuts; the understanding JSON is downloadable.
+
+This pass uses [Qwen2.5-VL-3B-Instruct](https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct),
+pinned to revision `66285546d2b821cf421d4f5eb2576359d3770cd3`, through the Transformers runtime. Structured category roles use `lm-format-enforcer` to constrain JSON and role-list sizes during decoding.
+Existing installs can add it with `uv pip install --python .venv/bin/python -r requirements.txt`. Its first use downloads about 7.5 GB of model weights into
+`HF_HOME` (default `.cache/huggingface`); allow several minutes for initial analysis.
+It uses CUDA on NVIDIA, MPS on Apple Silicon, or CPU as a slow fallback. Paraphrase matching uses [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2),
+revision `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`, through the same Transformers
+runtime on CPU (about 90 MB of additional weights). Explicit group/category phrases
+and tour requests resolve directly; paraphrases use semantic similarity and the
+scene’s functional roles. Similarity is a retrieval heuristic, not a probability,
+and weak matches return no result. No API key
+is needed, and images/prompts are not uploaded to a model service. Run the viewer
+with the project's `.venv/bin/python`, as in the examples above.
+
+The index combines a room overview, up to two geometry-consistent mask crops per
+object, model-generated descriptions, functional groups, and nearby-box relations.
+For whole-scene reasoning, the model proposes category roles (for example desk,
+monitor, chair, lamp). The backend binds those roles to actual instance IDs using
+observed boxes, source evidence, proximity, and parent links. The model does not
+select numeric instance IDs from a long catalog. Prompt interpretation selects
+named groups or categories; the same geometry layer resolves the actual subjects.
+Simple nearest-object requests and visible color keywords are supported;
+arbitrary multi-hop spatial language remains a prototype limitation.
+Each description retains the original object ID/category and evidence views. The
+original `interactions.json` and measured geometry are unchanged. Model-inferred
+names, object groups, visual priority, and room identity remain fallible; unclear
+crops are marked uncertain. A no-match result does not substitute a random object.
+This layer cannot recover objects missed by detection or repair existing duplicate
+instances or bad boxes.
+
+Suggested views reuse rendered analysis frames. Observed surface samples must pass
+projection and depth-visibility checks before a subject can be listed in a preview.
+The selector proposes a group overview plus available detail views; it can return
+fewer than three. It does not generate camera paths, new render angles, or video,
+and these checks are not a watertight collision model. A matched object with no
+usable saved view gets an explicit message. Camera motion is a later stage.
+
+`scene-understanding.json` is cached beside `interactions.json`; evidence cards,
+per-batch results, and prompt/view caches live under `understanding/`. Changing the
+analysis, transforms, model revision, or index version invalidates the index;
+compatible per-object descriptions can be reused when only group logic changes.
+Repeated prompts reuse their cached result. Failed indexing can resume completed
+batches. A malformed object batch is retried as individual objects; unresolved
+descriptions retain their detector label and are explicitly marked uncertain.
+GPU inference prefers the checkpoint’s native bfloat16 precision. Upload/analysis and scene-understanding requests share one GPU slot; the
+viewer shows real stage progress and reports a busy or failed request explicitly.
+Scene requests carry the scene ID and source hash, and late responses are ignored
+after switching scenes. Server restart preserves disk caches, but not active jobs.
+
+For a standalone index and query without the viewer:
+
+```bash
+HF_HOME="$PWD/.cache/huggingface" .venv/bin/python scene_understanding.py \
+  --result /path/to/analysis/interactions.json \
+  --prompt "Show off my desk setup" --output /path/to/analysis/desk-preview.json
+```
+
 ## Output files
 
 | File | Contents |
 | --- | --- |
+| `scene-understanding.json` | Grounded descriptions, object groups, main subjects, and relationships |
+| `understanding/` | Evidence cards, cached inference, query responses, and preview images |
 | `interactions.json` | Resolved records, labels, alternatives, positions, boxes, evidence, and parent/child links |
 | `candidates.json` | Original candidates before mask-based instance resolution |
 | `discovery.json` | Automatically generated labels and tags for every view |
@@ -203,6 +270,7 @@ contents. These are model outputs, not verified ground-truth counts.
 .venv/bin/python check-cameras.py
 .venv/bin/python check-boxes.py
 .venv/bin/python check-server.py
+.venv/bin/python check-understanding.py
 node check-coordinates.mjs
 ```
 

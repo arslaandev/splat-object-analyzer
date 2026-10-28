@@ -13,7 +13,7 @@ export class AnnotatedObject {
         hooks.onHoverStart?.(annotation);
       },
       onHoverEnd: () => {
-        this.box.hide();
+        if (!annotation.selected) this.box.hide();
         hooks.onHoverEnd?.(annotation);
       },
     });

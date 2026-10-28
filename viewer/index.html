@@ -24,6 +24,27 @@
     <progress id="analysis-progress" aria-label="Analysis progress"></progress>
     <a id="download-results" class="hidden" download="interactions.json">Download results</a>
   </section>
+  <section id="scene-understanding" class="hidden" aria-label="Scene understanding">
+    <button id="understanding-toggle" type="button" aria-expanded="true" aria-controls="understanding-body">Explore this scene <span>⌄</span></button>
+    <div id="understanding-body">
+      <div id="scene-summary"></div>
+      <div id="scene-groups" aria-label="Scene groups"></div>
+      <form id="scene-prompt-form">
+        <label for="scene-prompt">What would you like to show?</label>
+        <textarea id="scene-prompt" rows="2" maxlength="1000" placeholder="Show off my desk setup"></textarea>
+        <button id="scene-prompt-submit" type="submit">Find subjects &amp; views</button>
+      </form>
+      <div id="understanding-state" role="status" aria-live="polite"></div>
+      <progress id="understanding-progress" class="hidden" aria-label="Scene understanding progress"></progress>
+      <button id="understanding-retry" class="hidden" type="button">Retry</button>
+      <div id="subject-selection"></div>
+      <div id="suggested-views" aria-label="Suggested views"></div>
+      <div class="understanding-actions">
+        <button id="show-all-subjects" type="button">Show all labels</button>
+        <button id="download-understanding" type="button">Download understanding</button>
+      </div>
+    </div>
+  </section>
   <div id="navigation-hint">WASD move · Q/E down/up · Shift faster · Drag to look</div>
   <div id="loading" class="hidden" role="status" aria-live="polite">
     <div class="loading-bar-track">

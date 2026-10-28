@@ -355,3 +355,41 @@ button:disabled, select:disabled { opacity: .55; cursor: wait; }
   z-index: 10;
 }
 #reset-view { position: fixed; left: 124px; bottom: 20px; z-index: 10; font-size: 24px; }
+
+/* Scene understanding stays separate from the upload/progress card. */
+#scene-understanding { position: fixed; top: 16px; right: 16px; z-index: 15; width: min(360px, calc(100vw - 32px)); max-height: calc(100vh - 88px); overflow: auto; border: 1px solid #29384a; border-radius: 12px; background: rgba(12,16,24,.96); box-shadow: 0 8px 30px #0006; font-size: 13px; }
+#scene-understanding.hidden, #scene-understanding .hidden { display: none; }
+#understanding-toggle { width: 100%; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: #e8f0fb; font: inherit; font-weight: 600; padding: 15px; text-align: left; cursor: pointer; }
+#understanding-toggle span { float: right; }
+#understanding-body { padding: 14px; }
+#scene-understanding.collapsed #understanding-body { display: none; }
+#scene-summary { line-height: 1.5; }
+#scene-summary strong { display: block; color: #e6eef9; text-transform: capitalize; margin-bottom: 6px; }
+#scene-groups { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+#scene-understanding button:not(#understanding-toggle) { font: inherit; color: #d8e6f8; background: #172335; border: 1px solid #33465e; border-radius: 6px; padding: 7px 10px; cursor: pointer; }
+#scene-understanding button:hover:not(:disabled) { border-color: #7baeff; background: #20314a; }
+#scene-understanding button:focus-visible, #scene-prompt:focus-visible { outline: 2px solid #8dbbff; outline-offset: 2px; }
+#scene-prompt-form label { display: block; margin-bottom: 7px; font-weight: 500; }
+#scene-prompt { width: 100%; resize: vertical; min-height: 62px; max-height: 160px; padding: 10px; color: #edf3fb; background: #070c14; border: 1px solid #33465e; border-radius: 7px; font: inherit; line-height: 1.4; }
+#scene-prompt::placeholder { color: #8b9caf; }
+#scene-prompt-submit { width: 100%; margin-top: 7px; }
+#understanding-state { color: #a6b8cf; font-size: 12px; line-height: 1.5; margin-top: 12px; overflow-wrap: anywhere; }
+#understanding-state[data-failed="true"] { color: #ffb9b9; }
+#understanding-progress { width: 100%; height: 7px; accent-color: var(--accent); margin-top: 8px; }
+#understanding-retry { margin-top: 8px; }
+#subject-selection { margin-top: 13px; line-height: 1.5; }
+#subject-selection ul { padding-left: 18px; margin: 8px 0; }
+#subject-selection p + p { color: #a6b8cf; margin-top: 7px; }
+#suggested-views { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+#scene-understanding .suggested-view { padding: 0; overflow: hidden; text-align: left; }
+.suggested-view img { width: 100%; aspect-ratio: 1.7; object-fit: contain; background: #06090f; display: block; }
+.suggested-view span, .suggested-view small { display: block; padding: 7px 10px; }
+.suggested-view small { color: #a9bed8; padding-top: 0; font-size: 11px; line-height: 1.4; }
+#scene-understanding .suggested-view[aria-pressed="true"] { border-color: #8dbbff; }
+.view-note { color: #93a7bf; font-size: 11px; line-height: 1.45; }
+.understanding-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 15px; }
+#scene-understanding .understanding-actions button { font-size: 11px; background: transparent; }
+@media (max-width: 780px) {
+  #analysis-status { width: calc(100vw - 32px); }
+  #scene-understanding { top: 124px; width: 300px; max-height: calc(100vh - 205px); }
+}

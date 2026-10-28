@@ -32,6 +32,16 @@ if b'fail' in source.read_bytes():
 (out/'interactions.json').write_text(json.dumps({'input':{'path':str(source),'sha256':hashlib.sha256(source.read_bytes()).hexdigest()},'objects':[]}))
 ''')
     (root / 'run.sh').write_text('exec ' + shlex.quote(sys.executable) + ' ' + shlex.quote(str(script)) + ' "$@"\n')
+    (root / 'scene_understanding.py').write_text('''import argparse,json,time
+from pathlib import Path
+p=argparse.ArgumentParser();p.add_argument('--result');p.add_argument('--prompt');p.add_argument('--output');a=p.parse_args()
+print('[understand] '+json.dumps(dict(stage='Checking visibility',completed=1,total=2)),flush=True)
+time.sleep(.3)
+if a.prompt=='fail': raise RuntimeError('test semantic failure')
+r=json.loads(Path(a.result).read_text());out=Path(a.output)
+(out.parent/'view-0000.jpg').write_bytes(b'test-jpeg')
+out.write_text(json.dumps(dict(source_hash=r['input']['sha256'],shots=[dict(image='view-0000.jpg')],selection=dict(object_ids=[]))))
+''')
     analysis_server.ROOT = root
     jobs = analysis_server.AnalysisJobs(root / 'jobs')
     handler = partial(analysis_server.handler_for(jobs, 0), directory=str(root))
@@ -90,5 +100,36 @@ if b'fail' in source.read_bytes():
         assert analysis_server.progress_from_line('[identity] Segmented 3/10 views')['completed'] == 3
         assert analysis_server.progress_from_line('[detect] Processed 7/90 views')['total'] == 90
         assert analysis_server.progress_from_line('arbitrary warning') is None
+        body = {'sceneId':job_id,'sourceHash':data['input']['sha256'],'prompt':'Show my workspace'}
+        def semantic(value, headers_override=None):
+            return request('/api/understanding',json.dumps(value).encode(), headers_override or headers)
+        assert semantic(body, {**headers,'Origin':'http://outside.example'})[0]==403
+        assert request('/api/understanding',b'[]',headers)[0]==400
+        assert semantic({**body,'sourceHash':'wrong-scene'})[0]==400
+        assert semantic({**body,'sceneId':'../../outside'})[0]==400
+        assert semantic({**body,'prompt':'x'*1001})[0]==400
+        code, semantic_job=semantic(body)
+        assert code==202
+        assert semantic(body)[1]['id']==semantic_job['id'], 'Refresh duplicated the active model request'
+        assert semantic({**body,'prompt':''})[1]['id']==semantic_job['id'], 'Refresh did not resume the active prompt'
+        assert semantic({**body,'prompt':'another prompt'})[0]==409
+        assert request('/api/jobs?filename=blocked.ply', b'ply\n', headers)[0]==409
+        def wait_semantic(request_id):
+            deadline=time.monotonic()+10
+            while time.monotonic()<deadline:
+                _, status=request('/api/understanding/'+request_id)
+                if status['status'] in {'complete','failed'}: return status
+                time.sleep(.03)
+            raise AssertionError('Semantic request never finished')
+        status=wait_semantic(semantic_job['id'])
+        assert status['status']=='complete', status
+        assert status['result']['source_hash']==body['sourceHash']
+        image=status['result']['shots'][0]['imageUrl']
+        with urlopen(base+image) as response:
+            assert response.headers['Content-Type']=='image/jpeg' and response.read()==b'test-jpeg'
+        assert request('/api/understanding/'+'0'*32)[0]==404
+        code, failed=semantic({**body,'prompt':'fail'})
+        assert code==202 and wait_semantic(failed['id'])['status']=='failed'
+        assert jobs.understanding_active is None
         server.shutdown()
-print('Viewer upload, progress, result isolation, and failure checks passed.')
+print('Viewer upload, understanding, scene isolation, busy, and failure checks passed.')
