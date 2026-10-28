@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlsplit
 import uuid
 
 from understanding_jobs import UnderstandingJobs
+from pipeline_progress import progress_from_line
 
 
 ROOT = Path(__file__).resolve().parent
@@ -47,27 +48,6 @@ def make_config(result, result_path, scene, prefix=''):
             if camera:
                 config['camera'] = camera
     return {'scene': config}
-
-
-def progress_from_line(line):
-    """Translate real pipeline messages into stages; no invented overall percent."""
-    if '[render]' in line or '[pipeline] Step 1' in line or '[spz]' in line:
-        stage = 'Selecting and rendering views'
-    elif '[discover]' in line:
-        stage = 'Discovering object names'
-    elif '[detect] Processed' in line or 'Loading OWLv2' in line or '[pipeline] Step 2' in line:
-        stage = 'Detecting objects'
-    elif '[pipeline] Step 3' in line or '[cluster]' in line:
-        stage = 'Associating detections'
-    elif '[identity]' in line:
-        stage = 'Segmenting objects and fitting boxes'
-    else:
-        return None
-    match = re.search(r'(\d+)\s*/\s*(\d+)', line)
-    update = {'stage': stage, 'completed': None, 'total': None}
-    if match:
-        update.update(completed=int(match[1]), total=int(match[2]))
-    return update
 
 
 class AnalysisJobs:

@@ -1,5 +1,10 @@
 # Splat Object Analyzer
 
+For headless hosting, see the [versioned API contract](API.md) and
+[GCP A100 deployment guide](deploy/README.md). The standalone API accepts a splat,
+processes it through a persistent job queue, and returns structured scene/object
+results. It does not serve the prototype frontend.
+
 Input a Gaussian splat (`.spz` or standard 3DGS `.ply`) and get an object inventory
 with labels, 3D positions, bounding boxes, supporting images, and parent/child
 relationships. Object names are discovered automatically.

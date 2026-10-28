@@ -1,0 +1,42 @@
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    VIRTUAL_ENV=/opt/splat/.venv \
+    PATH=/opt/splat/.venv/bin:$PATH \
+    CUDA_HOME=/usr/local/cuda \
+    TORCH_CUDA_ARCH_LIST=8.0 \
+    MAX_JOBS=4 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 python3.12-venv python3-dev build-essential git ca-certificates libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/splat
+RUN python3.12 -m venv .venv && python -m pip install --no-cache-dir setuptools==81.0.0 wheel==0.48.0
+RUN python -m pip install --no-cache-dir torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu128
+COPY requirements.txt requirements-cuda.txt requirements-api.txt ./
+RUN python -m pip install --no-cache-dir -r requirements-cuda.txt -r requirements-api.txt
+RUN git clone --filter=blob:none https://github.com/xinyu1205/recognize-anything.git third_party/recognize-anything \
+    && git -C third_party/recognize-anything checkout --detach 7cb804a8609e9f4b1a50b7f31436d2df40bb9481 \
+    && python -m pip install --no-cache-dir --no-deps -e third_party/recognize-anything \
+    && python -m pip install --no-cache-dir --no-build-isolation gsplat==1.5.3
+COPY *.py *.sh ./
+COPY api ./api
+COPY renderers ./renderers
+COPY licenses ./licenses
+COPY LICENSE.md THIRD_PARTY_NOTICES.md ./
+RUN chmod +x serve-api.sh \
+    && python -c 'import torch, ram, gsplat, api_server' \
+    && useradd --uid 10001 --create-home splat \
+    && mkdir -p /data /cache/huggingface /cache/torch /cache/torch-extensions \
+    && chown -R splat:splat /data /cache
+ENV SPLAT_DATA_DIR=/data \
+    SPLAT_API_HOST=0.0.0.0 \
+    SPLAT_REQUIRE_CUDA=1 \
+    HF_HOME=/cache/huggingface \
+    TORCH_HOME=/cache/torch \
+    TORCH_EXTENSIONS_DIR=/cache/torch-extensions
+USER splat
+EXPOSE 8000
+CMD ["./serve-api.sh"]
