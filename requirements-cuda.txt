@@ -1,0 +1,6 @@
+-r requirements.txt
+numpy==1.26.4
+scipy==1.15.3
+opencv-python-headless==4.11.0.86
+# The renderer is installed separately after torch is available.
+
