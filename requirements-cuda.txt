@@ -1,4 +1,6 @@
 -r requirements.txt
+# plyfile 1.1.4 requires NumPy 2; CUDA currently uses NumPy 1.26.
+plyfile==1.1.3
 numpy==1.26.4
 scipy==1.15.3
 opencv-python-headless==4.11.0.86
