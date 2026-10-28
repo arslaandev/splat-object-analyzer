@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { Annotation } from "./Annotation.js";
+import { viewerPosition, viewerRotation } from './SceneCoordinates.js';
 
 const PALETTE = [
   "#2f81f7", "#3fb950", "#db6d28", "#a371f7",
@@ -7,14 +8,15 @@ const PALETTE = [
 ];
 
 // The splat is rotated π about X in SplatView; annotations must follow the same
-// mapping: position (x,-y,-z) and quaternion (x,-y,-z,w).
+// mapping comes from SceneCoordinates, shared with SplatView.
 function toViewerSpace(obj) {
-  const p = obj.position;
-  const position = new THREE.Vector3(p.x, -p.y, -p.z);
-  const s = obj.scale || obj.size || { x: 0.5, y: 0.5, z: 0.5 };
+  const box = obj.oriented_box || obj;
+  const p = viewerPosition(box.position);
+  const position = new THREE.Vector3(p.x, p.y, p.z);
+  const s = box.scale || box.size || { x: 0.5, y: 0.5, z: 0.5 };
   const size = new THREE.Vector3(s.x, s.y, s.z);
-  const r = obj.rotation || { x: 0, y: 0, z: 0, w: 1 };
-  const quaternion = new THREE.Quaternion(r.x, -r.y, -r.z, r.w);
+  const r = viewerRotation(box.rotation);
+  const quaternion = new THREE.Quaternion(r.x, r.y, r.z, r.w).normalize();
   return { position, size, quaternion };
 }
 

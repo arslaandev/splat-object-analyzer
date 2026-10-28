@@ -2,12 +2,16 @@
 // Pure UI: emits example ids and chosen File objects via callbacks.
 const GEAR = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
 
+const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+})[character]);
+
 export class SettingsMenu {
   constructor({ examples, defaultExampleId, onExampleSelect, onSplatFile, onAnnotationsFile, onShowContents }) {
     const exampleOptions = examples
       .map(
         (ex) =>
-          `<option value="${ex.id}"${ex.id === defaultExampleId ? " selected" : ""}>${ex.label}</option>`
+          `<option value="${escapeHtml(ex.id)}"${ex.id === defaultExampleId ? " selected" : ""}>${escapeHtml(ex.label)}</option>`
       )
       .join("");
 
@@ -19,11 +23,14 @@ export class SettingsMenu {
           <h2>Statistics</h2>
           <div class="stat-line" data-stat="fps">FPS —</div>
           <div class="stat-line" data-stat="splats">— mio Splats</div>
-          <div class="stat-line" data-stat="labels">0 Objects</div>
+          <div class="stat-line" data-stat="labels">0 Object records</div>
           <label class="field"><span>Show parts and contents</span><input type="checkbox" data-input="contents"></label>
         </div>
         <div class="menu">
           <h2>Load scene</h2>
+          <div class="field"><label for="analysis-quality">Analysis coverage</label>
+            <select id="analysis-quality" data-input="quality"><option value="high">High (recommended)</option><option value="medium">Medium</option><option value="low">Low</option></select>
+          </div>
           <div class="field">
             <label>Examples</label>
             <select data-input="example">
@@ -34,7 +41,7 @@ export class SettingsMenu {
           <div class="field">
             <label>Gaussian splat</label>
             <button class="file-btn" data-target="splat">Choose .ply / .spz…</button>
-            <input type="file" accept=".ply,.spz,.splat,.ksplat,.rad" data-input="splat">
+            <input type="file" accept=".ply,.spz" data-input="splat">
           </div>
           <div class="field">
             <label>Annotations</label>
@@ -91,6 +98,19 @@ export class SettingsMenu {
     this._exampleSelect.value = id;
   }
 
+  chooseSplat() { this._root.querySelector('[data-target="splat"]').click(); }
+  getQuality() { return this._root.querySelector('[data-input="quality"]').value; }
+  addExample(example) {
+    if ([...this._exampleSelect.options].some(option => option.value === example.id)) return;
+    const option = document.createElement('option');
+    option.value = example.id;
+    option.textContent = example.label;
+    this._exampleSelect.appendChild(option);
+  }
+  setBusy(busy) {
+    for (const field of this._root.querySelectorAll('select, input[type="file"], .file-btn')) field.disabled = busy;
+  }
+
   _setOpen(open) {
     this._open = open;
     this._panels.classList.toggle("open", open);
@@ -106,7 +126,7 @@ export class SettingsMenu {
     const fpsText = Number.isFinite(fps) ? Math.round(fps) : "—";
     const splatsText =
       splatCount > 0 ? `${(splatCount / 1_000_000).toFixed(2)} mio Splats` : "— mio Splats";
-    const labelsText = `${labelCount || 0} Objects`;
+    const labelsText = `${labelCount || 0} Object records`;
     const key = `${fpsText}|${splatsText}|${labelsText}`;
     if (key === this._lastStatsKey) return;
     this._lastStatsKey = key;
@@ -126,7 +146,7 @@ export class SettingsMenu {
   _wireInput(root, key, placeholder, callback) {
     const btn = root.querySelector(`[data-target="${key}"]`);
     const input = root.querySelector(`[data-input="${key}"]`);
-    btn.addEventListener("click", () => input.click());
+    btn.addEventListener("click", () => { input.value = ''; input.click(); });
     input.addEventListener("change", () => {
       const file = input.files[0];
       if (!file) return;

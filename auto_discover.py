@@ -25,6 +25,8 @@ CONTEXT_TAGS = {
     'yellow', 'colorful', 'bright', 'dark', 'sunlight', 'daylight', 'shadow',
     'cozy', 'clutter', 'cluttered', 'messy', 'clean', 'tidy', 'empty',
     'small', 'large', 'modern', 'vintage', 'old', 'standing', 'sitting',
+    'meeting room', 'dining room', 'kitchen', 'restaurant kitchen', 'restaurant',
+    'coffee shop', 'cafe', 'canteen', 'apartment', 'basement', 'warehouse',
 }
 ALIASES = {
     'bookcase': 'bookshelf', 'bookshelves': 'bookshelf', 'book shelf': 'bookshelf',
@@ -34,6 +36,8 @@ ALIASES = {
     'computer desk': 'desk', 'office desk': 'desk',
     'hardwood floor': 'floor', 'wood floor': 'floor', 'wall clock': 'clock',
     'office chair': 'chair', 'desk chair': 'chair', 'swivel chair': 'chair',
+    'dinning table': 'table', 'dining table': 'table', 'kitchen table': 'table',
+    'kitchen sink': 'sink',
 }
 
 
@@ -45,6 +49,7 @@ def normalise_tag(tag):
 
 
 def discover_labels(frames_dir, transforms, device):
+    print('[discover] Preparing tagging model', flush=True)
     from huggingface_hub import hf_hub_download, snapshot_download
     from ram import get_transform, inference_ram
     from ram.models import ram_plus

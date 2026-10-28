@@ -17,8 +17,15 @@
 </head>
 <body>
   <div id="viewport"></div>
-  <div id="empty-hint">Open the menu to load a splat (.ply or .spz) and its interactions.json</div>
-  <div id="loading" class="hidden">
+  <div id="empty-hint"><p>Upload a Gaussian splat to find objects and their boxes.</p><button id="choose-scene">Choose .ply / .spz</button></div>
+  <section id="analysis-status" class="hidden" aria-live="polite" aria-atomic="true">
+    <strong id="analysis-title"></strong>
+    <span id="analysis-detail"></span>
+    <progress id="analysis-progress" aria-label="Analysis progress"></progress>
+    <a id="download-results" class="hidden" download="interactions.json">Download results</a>
+  </section>
+  <div id="navigation-hint">WASD move · Q/E down/up · Shift faster · Drag to look</div>
+  <div id="loading" class="hidden" role="status" aria-live="polite">
     <div class="loading-bar-track">
       <div class="loading-bar-fill" id="loading-bar-fill"></div>
     </div>
