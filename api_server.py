@@ -1,0 +1,253 @@
+"""Versioned, headless API. Run with serve-api.sh; see API.md and deploy/README.md."""
+from contextlib import asynccontextmanager
+import asyncio
+from dataclasses import dataclass
+import hashlib
+import hmac
+import json
+import logging
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+from typing import Annotated, Literal
+import uuid
+
+from fastapi import APIRouter, Depends, FastAPI, Path as PathParam, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.concurrency import run_in_threadpool
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from api.schemas import AnalysisResult, ErrorResponse, Job, QueryRequest, QueryResult
+from api.storage import QueueFull, Store, now
+from api.worker import Worker
+
+ROOT = Path(__file__).resolve().parent
+JobId = Annotated[str, PathParam(pattern=r'^[a-f0-9]{32}$')]
+
+
+@dataclass
+class Settings:
+    data_dir: Path
+    api_key: str
+    max_upload_bytes: int = 2 * 1024**3
+    max_pending_jobs: int = 8
+    stage_timeout_seconds: int = 21600
+    cors_origins: tuple[str, ...] = ()
+    require_cuda: bool = False
+
+    @classmethod
+    def from_env(cls):
+        return cls(data_dir=Path(os.getenv('SPLAT_DATA_DIR', ROOT/'outputs/api')),
+            api_key=os.getenv('SPLAT_API_KEY', ''), max_upload_bytes=int(os.getenv('SPLAT_MAX_UPLOAD_BYTES', str(2*1024**3))),
+            max_pending_jobs=int(os.getenv('SPLAT_MAX_PENDING_JOBS', '8')),
+            stage_timeout_seconds=int(os.getenv('SPLAT_STAGE_TIMEOUT_SECONDS', '21600')),
+            cors_origins=tuple(s.strip() for s in os.getenv('SPLAT_CORS_ORIGINS', '').split(',') if s.strip()),
+            require_cuda=os.getenv('SPLAT_REQUIRE_CUDA', '0') == '1')
+
+
+class APIError(Exception):
+    def __init__(self, status, code, message):
+        self.status, self.code, self.message = status, code, message
+
+
+def public_job(record):
+    result_url = ('/v1/analyses/' if record['kind'] == 'analysis' else '/v1/queries/') + record['id']
+    return Job.model_validate({k:record.get(k) for k in (
+        'id','kind','analysis_id','status','created_at','started_at','finished_at','progress','error')} |
+        dict(status_url='/v1/jobs/'+record['id'], result_url=result_url))
+
+
+def create_app(settings=None, app_root=ROOT):
+    settings = settings or Settings.from_env()
+    @asynccontextmanager
+    async def lifespan(app):
+        if len(settings.api_key) < 32 or settings.api_key.startswith('replace-'):
+            raise RuntimeError('Set SPLAT_API_KEY to a random secret of at least 32 characters before starting the API')
+        if min(settings.max_upload_bytes, settings.max_pending_jobs, settings.stage_timeout_seconds) <= 0:
+            raise RuntimeError('Upload, queue, and timeout limits must be positive')
+        if settings.require_cuda:
+            subprocess.run([sys.executable, '-c', 'import torch; assert torch.cuda.is_available(), "CUDA GPU is unavailable"'], check=True)
+        app.state.store = Store(settings.data_dir, settings.max_pending_jobs)
+        app.state.upload_slots = asyncio.Semaphore(2)
+        app.state.worker = Worker(app.state.store, app_root, settings.stage_timeout_seconds)
+        app.state.worker.start()
+        try:
+            yield
+        finally:
+            app.state.worker.close()
+
+    app = FastAPI(title='Splat Object Analyzer API', version='1.0.0', lifespan=lifespan,
+        description='Upload a Gaussian splat, poll its asynchronous job, and retrieve objects, geometry, scene groups, and prompt-selected views.')
+    if settings.cors_origins:
+        app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins),
+            allow_methods=['GET','POST'], allow_headers=['Authorization','Content-Type'], expose_headers=['Location','Retry-After'])
+    bearer = HTTPBearer(auto_error=False)
+    async def authenticate(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]):
+        if not credentials or not hmac.compare_digest(credentials.credentials.encode(), settings.api_key.encode()):
+            raise APIError(401, 'unauthorized', 'Provide a valid Authorization: Bearer API key')
+
+    @app.exception_handler(APIError)
+    async def api_error(request, error):
+        headers = {'WWW-Authenticate':'Bearer'} if error.status == 401 else {}
+        if error.status in (409,429): headers['Retry-After'] = '2'
+        return JSONResponse(dict(error=dict(code=error.code, message=error.message, details=[])), status_code=error.status, headers=headers)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request, error):
+        details = [dict(field='.'.join(map(str,e['loc'])), message=e['msg']) for e in error.errors()]
+        return JSONResponse(dict(error=dict(code='invalid_request', message='Request validation failed', details=details)), status_code=422)
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error(request, error):
+        return JSONResponse(dict(error=dict(code='http_error', message=str(error.detail), details=[])), status_code=error.status_code)
+
+    @app.exception_handler(Exception)
+    async def internal_error(request, error):
+        logging.getLogger(__name__).error('Unhandled API error', exc_info=error)
+        return JSONResponse(dict(error=dict(code='internal_error', message='Unexpected server error. Check the service logs.', details=[])), status_code=500)
+
+    @app.get('/health/live', tags=['health'])
+    def live():
+        return dict(status='alive')
+
+    @app.get('/health/ready', tags=['health'])
+    def ready():
+        worker = getattr(app.state, 'worker', None)
+        ok = bool(worker and worker.thread and worker.thread.is_alive() and not worker.stop.is_set())
+        return JSONResponse(dict(status='ready' if ok else 'unavailable'), status_code=200 if ok else 503)
+
+    router = APIRouter(prefix='/v1', dependencies=[Depends(authenticate)], responses={
+        code:dict(model=ErrorResponse) for code in (400,401,404,409,413,415,422,429,500)})
+
+    def get_record(job_id, kind=None):
+        record = app.state.store.get(job_id)
+        if not record or (kind and record['kind'] != kind):
+            raise APIError(404, 'not_found', 'Job not found')
+        return record
+
+    def completed(job_id, kind):
+        record = get_record(job_id, kind)
+        if record['status'] != 'succeeded':
+            raise APIError(409, 'result_not_ready', f'Result is unavailable while job status is {record["status"]}. Poll /v1/jobs/{job_id}.')
+        return record
+
+    async def upload_slot():
+        async with app.state.upload_slots:
+            yield
+
+    @router.post('/analyses', response_model=Job, status_code=202, tags=['analysis'], dependencies=[Depends(upload_slot)],
+        openapi_extra={'requestBody':{'required':True,'content':{'application/octet-stream':{'schema':{'type':'string','format':'binary'}}}}})
+    async def submit(request: Request, filename: str = Query(min_length=5, max_length=180),
+                     quality: Literal['low','medium','high'] = 'high', understanding: bool = True):
+        if app.state.store.pending_count() >= settings.max_pending_jobs:
+            raise APIError(429, 'queue_full', 'The processing queue is full. Retry later.')
+        if (Path(filename).name != filename or '\\' in filename or any(ord(c) < 32 for c in filename) or
+            Path(filename).suffix.lower() not in ('.ply','.spz')):
+            raise APIError(400, 'invalid_file', 'Provide a plain .ply or .spz filename')
+        if request.headers.get('content-type', '').split(';')[0].lower() != 'application/octet-stream':
+            raise APIError(415, 'invalid_content_type', 'Send the file as application/octet-stream')
+        try:
+            length = int(request.headers.get('content-length', '0'))
+        except ValueError:
+            raise APIError(400, 'invalid_content_length', 'Invalid Content-Length')
+        if length > settings.max_upload_bytes:
+            raise APIError(413, 'file_too_large', 'File exceeds the configured upload limit')
+        job_id = uuid.uuid4().hex
+        directory = app.state.store.directory(job_id)
+        directory.mkdir()
+        suffix = Path(filename).suffix.lower()[1:]
+        partial = directory/'upload.partial'
+        accepted = False
+        size, magic, digest = 0, b'', hashlib.sha256()
+        try:
+            with partial.open('xb') as destination:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > settings.max_upload_bytes:
+                        raise APIError(413, 'file_too_large', 'File exceeds the configured upload limit')
+                    magic = (magic+chunk[:4])[:4]
+                    digest.update(chunk)
+                    await run_in_threadpool(destination.write, chunk)
+            if not size or (suffix == 'ply' and not magic.startswith(b'ply')) or (suffix == 'spz' and not magic.startswith(b'\x1f\x8b')):
+                raise APIError(400, 'invalid_file', 'The file contents do not match the requested Gaussian splat format')
+            partial.replace(directory/('source.'+suffix))
+            record = dict(id=job_id, kind='analysis', analysis_id=job_id, status='queued', created_at=now(),
+                started_at=None, finished_at=None, progress=dict(stage='Queued',completed=None,total=None), error=None,
+                filename=filename, format=suffix, bytes=size, sha256=digest.hexdigest(), quality=quality, understanding=understanding)
+            try:
+                app.state.store.create(record)
+            except QueueFull:
+                raise APIError(429, 'queue_full', 'The processing queue is full. Retry later.')
+            accepted = True
+            app.state.worker.wake.set()
+            return JSONResponse(public_job(record).model_dump(mode='json'), status_code=202,
+                headers={'Location':'/v1/jobs/'+job_id, 'Retry-After':'2'})
+        finally:
+            if not accepted:
+                shutil.rmtree(directory, ignore_errors=True)
+
+    @router.get('/jobs/{job_id}', response_model=Job, tags=['jobs'])
+    def status(job_id: JobId):
+        return public_job(get_record(job_id))
+
+    @router.get('/analyses/{analysis_id}', response_model=AnalysisResult, tags=['analysis'])
+    def result(analysis_id: JobId):
+        completed(analysis_id, 'analysis')
+        return AnalysisResult.model_validate_json((app.state.store.directory(analysis_id)/'result.json').read_text())
+
+    @router.post('/analyses/{analysis_id}/queries', response_model=Job, status_code=202, tags=['queries'])
+    def query(analysis_id: JobId, value: QueryRequest):
+        parent = completed(analysis_id, 'analysis')
+        if not parent['understanding']:
+            raise APIError(409, 'understanding_required', 'This analysis omitted scene understanding. Submit a new analysis with understanding=true.')
+        prompt = value.prompt.strip()
+        if not prompt:
+            raise APIError(400, 'empty_prompt', 'Provide a non-empty prompt')
+        query_id = uuid.uuid4().hex
+        directory = app.state.store.directory(query_id)
+        directory.mkdir()
+        record = dict(id=query_id, kind='query', analysis_id=analysis_id, sha256=parent['sha256'], prompt=prompt,
+            status='queued', created_at=now(), started_at=None, finished_at=None, error=None,
+            progress=dict(stage='Queued',completed=None,total=None))
+        try:
+            app.state.store.create(record)
+        except QueueFull:
+            directory.rmdir()
+            raise APIError(429, 'queue_full', 'The processing queue is full. Retry later.')
+        app.state.worker.wake.set()
+        return JSONResponse(public_job(record).model_dump(mode='json'), status_code=202,
+            headers={'Location':'/v1/jobs/'+query_id, 'Retry-After':'2'})
+
+    @router.get('/queries/{query_id}', response_model=QueryResult, tags=['queries'])
+    def query_result(query_id: JobId):
+        completed(query_id, 'query')
+        return QueryResult.model_validate_json((app.state.store.directory(query_id)/'result.json').read_text())
+
+    @router.get('/analyses/{analysis_id}/source', response_class=FileResponse, tags=['assets'])
+    def source(analysis_id: JobId):
+        record = completed(analysis_id, 'analysis')
+        return FileResponse(app.state.store.directory(analysis_id)/('source.'+record['format']),
+            media_type='application/octet-stream', filename=record['filename'])
+
+    @router.get('/analyses/{analysis_id}/frames/{frame_index}', response_class=FileResponse, tags=['assets'])
+    def frame(analysis_id: JobId, frame_index: Annotated[int, PathParam(ge=0)]):
+        completed(analysis_id, 'analysis')
+        root = app.state.store.directory(analysis_id)/'analysis'
+        frames = json.loads((root/'transforms.json').read_text())['frames']
+        if frame_index >= len(frames):
+            raise APIError(404, 'not_found', 'Rendered frame not found')
+        path = (root/frames[frame_index]['file_path']).resolve()
+        if not path.is_relative_to(root.resolve()) or path.suffix.lower() != '.png' or not path.is_file():
+            raise APIError(404, 'not_found', 'Rendered frame not found')
+        return FileResponse(path, media_type='image/png')
+
+    app.include_router(router)
+    return app
+
+
+app = create_app()
