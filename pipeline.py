@@ -300,6 +300,8 @@ def _run_owlv2(frames_dir: Path, labels: list[str], transforms: dict, scene_radi
             print(f"  [detect] {label} ({score:.2f}) depth={box_depth:.2f} "
                   f"@ {world_pos.round(3)} {frame_path.name}")
 
+        print(f'[detect] Processed {frame_idx + 1}/{len(transforms["frames"])} views', flush=True)
+
     return raw_detections
 
 

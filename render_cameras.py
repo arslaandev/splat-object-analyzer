@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import imageio.v2 as imageio
+from PIL import Image
 from scipy.spatial import cKDTree
 
 from config import PipelineConfig, QUALITY_PRESETS, DEFAULT_QUALITY
@@ -264,175 +265,168 @@ def _lookat(eye: np.ndarray, target: np.ndarray, up: np.ndarray = None) -> np.nd
 _SUBSAMPLE_CAP = 300_000   # KDTree is built on at most this many splats
 
 
-def _legacy_circle_positions(center: np.ndarray, radius: float,
-                             n_positions: int, seed: int = 42) -> list:
-    """
-    Legacy placement: spread positions on a circle around the scene centre at
-    varying angles and heights. Kept as a last-resort fallback for the
-    density-aware sampler so rendering never fails to produce positions.
-    """
-    rng = np.random.default_rng(seed)
-    positions = []
-    base_angles = np.linspace(0, 2 * math.pi, n_positions, endpoint=False)
-    for angle in base_angles:
-        r = rng.uniform(0.45, 0.75) * radius
-        jitter = rng.uniform(-0.3, 0.3)
-        height_offset = rng.uniform(-0.15, 0.08) * radius
-        pos = center + np.array([
-            r * math.cos(angle + jitter),
-            height_offset,
-            r * math.sin(angle + jitter),
-        ], dtype=np.float32)
-        positions.append(pos)
-    return positions
-
-
-def _generate_camera_positions(means_np: np.ndarray, n_positions: int,
-                               cfg: PipelineConfig):
-    """
-    Clearance-first, blue-noise camera placement with a density fallback.
-
-    Prefer empty space inside the robust scene bounds so room cameras do not
-    clip through furniture and walls. Spread cameras with Poisson-disk spacing;
-    use the upstream density sampler when clearance cannot fill the count.
-
-    Returns (positions (P,3) float32 ndarray, look_targets (P,3) float32 ndarray).
-    `look_targets` points each camera at its nearest content centroid; it is
-    stored in transforms.json for the debug viewer / future content orientation.
-
-    The whole computation runs on CPU (numpy + scipy) so it is GPU-optional.
-    """
+def _camera_geometry(means_np, cfg):
+    means = np.asarray(means_np, dtype=np.float64)
+    means = means[np.isfinite(means).all(axis=1)]
+    if not len(means):
+        raise ValueError('Scene contains no finite Gaussian positions')
+    lo, hi = np.percentile(means, [cfg.bbox_pct_lo, cfg.bbox_pct_hi], axis=0)
+    diag = max(float(np.linalg.norm(hi - lo)), 1e-6)
+    clearance = max(float(np.min(hi - lo)) * cfg.camera_clearance_frac, diag * .008)
     rng = np.random.default_rng(cfg.seed)
-    means_np = np.asarray(means_np, dtype=np.float64)
+    if len(means) > _SUBSAMPLE_CAP:
+        means = means[rng.choice(len(means), _SUBSAMPLE_CAP, replace=False)]
+    return lo, hi, diag, clearance, cKDTree(means)
 
-    # ── 1. Robust bounding box (percentiles reject floater outliers) ────────
-    lo = np.percentile(means_np, cfg.bbox_pct_lo, axis=0)
-    hi = np.percentile(means_np, cfg.bbox_pct_hi, axis=0)
-    diag = float(np.linalg.norm(hi - lo))
-    if diag <= 0.0:
-        diag = 1.0
 
-    # ── 2. KDTree on a (possibly subsampled) point cloud ────────────────────
-    if len(means_np) > _SUBSAMPLE_CAP:
-        idx = rng.choice(len(means_np), _SUBSAMPLE_CAP, replace=False)
-        sub = means_np[idx]
-        subsample_frac = _SUBSAMPLE_CAP / len(means_np)
-    else:
-        sub = means_np
-        subsample_frac = 1.0
-    tree = cKDTree(sub)
-    r_density = cfg.density_radius_frac * diag
+def _generate_camera_positions(means_np, n_positions, cfg):
+    """Propose spaced clear positions; never fill a shortage with surface cameras.
 
-    def density(pts):
-        # Counts only (no list materialization), rescaled to full-cloud count.
-        counts = tree.query_ball_point(pts, r=r_density, return_length=True)
-        return np.asarray(counts, dtype=np.float64) / subsample_frac
-
-    # ── 3. Sample with density-weighted rejection + Poisson-disk spacing ────
-    def sample_round(alpha, min_sep, eps=1e-9):
-        r_min = min_sep * diag
-        accepted = []
-        # Candidate pool, scored in one batched density call.
-        M = max(40 * n_positions, 200)
-        cands = rng.uniform(lo, hi, size=(M, 3))
-        dens = density(cands)
-        d_ref = float(np.median(dens)) if dens.size else 0.0
-        order = rng.permutation(M)
-        for ci in order:
-            if len(accepted) >= n_positions:
-                break
-            d = dens[ci]
-            # Gaussian band-pass: peaks at d≈d_ref, →0 when buried (d≫d_ref)
-            # and in empty void (d→0).
-            p_accept = math.exp(-((d - d_ref) / (alpha * d_ref + eps)) ** 2)
-            if rng.random() >= p_accept:
-                continue
-            c = cands[ci]
-            if accepted:
-                dmin = np.min(np.linalg.norm(np.asarray(accepted) - c, axis=1))
-                if dmin < r_min:
-                    continue
-            accepted.append(c)
-        return accepted
-
-    # ponytail: surface clearance is a room-scan heuristic, not occupancy.
-    # Enclosed solids need a future preview-coverage check before accepting views.
-    pool = np.vstack([(lo + hi) / 2,
-                      rng.uniform(lo, hi, size=(max(40 * n_positions, 200), 3))])
-    clearances, _ = tree.query(pool)
+    This is a centre-clearance prefilter. Rendered previews below account for
+    the actual Gaussian extents/opacity and distinguish usable from empty views.
+    """
+    lo, hi, diag, clearance, tree = _camera_geometry(means_np, cfg)
+    rng = np.random.default_rng(cfg.seed)
+    pool = np.vstack([(lo + hi) / 2, rng.uniform(lo, hi, size=(8192, 3))])
+    distances, _ = tree.query(pool)
+    pool, distances = pool[distances >= clearance], distances[distances >= clearance]
     accepted = []
-    for ci in np.argsort(clearances)[::-1]:
-        if clearances[ci] < r_density or len(accepted) >= n_positions:
+    # Balance clearance and spatial spread so previews cover more than one void.
+    while len(pool) and len(accepted) < n_positions:
+        if accepted:
+            separation = np.min(np.linalg.norm(pool[:, None] - np.asarray(accepted), axis=2), axis=1)
+            score = np.minimum(distances / clearance, 4.) ** 2 * separation / diag
+            score[separation < cfg.min_sep_frac * diag] = -1
+        else:
+            score = distances
+        pick = int(np.argmax(score))
+        if score[pick] < 0:
             break
-        candidate = pool[ci]
-        if accepted and np.min(np.linalg.norm(np.asarray(accepted) - candidate, axis=1)) < cfg.min_sep_frac * diag:
-            continue
-        accepted.append(candidate)
-    print(f'[render] Clearance-first placement: {len(accepted)}/{n_positions} cameras')
+        accepted.append(pool[pick])
+        pool = np.delete(pool, pick, axis=0)
+        distances = np.delete(distances, pick)
+    positions = np.asarray(accepted, dtype=np.float32).reshape(-1, 3)
+    if not len(positions):
+        raise ValueError('No clear camera candidates found; scene may be a solid or incomplete scan')
+    _, nearest = tree.query(positions, k=min(64, tree.n))
+    targets = tree.data[np.asarray(nearest).reshape(len(positions), -1)].mean(axis=1)
+    return positions, targets.astype(np.float32)
 
-    if len(accepted) < n_positions:
-        more = sample_round(cfg.bandpass_alpha, cfg.min_sep_frac)
-        for candidate in more:
-            if len(accepted) >= n_positions:
-                break
-            if not accepted or np.min(np.linalg.norm(np.asarray(accepted) - candidate, axis=1)) >= cfg.min_sep_frac * diag:
-                accepted.append(candidate)
 
-    # ── 4. Relax up to 3 rounds if we couldn't place enough cameras ─────────
-    relax = 0
-    while len(accepted) < n_positions and relax < 3:
-        relax += 1
-        more = sample_round(cfg.bandpass_alpha * (1.0 + relax),
-                            cfg.min_sep_frac / (2 ** relax))
-        # Merge while keeping separation against what we already have.
-        r_min = (cfg.min_sep_frac / (2 ** relax)) * diag
-        for c in more:
-            if len(accepted) >= n_positions:
-                break
-            if not accepted or np.min(np.linalg.norm(np.asarray(accepted) - c, axis=1)) >= r_min:
-                accepted.append(c)
+def _view_quality(rgb, depth, clearance, diag):
+    """Scale-relative obstruction/background checks; scores are not probabilities."""
+    rgb_u8 = np.asarray(rgb, dtype=np.uint8)
+    rgb = rgb_u8.astype(np.float32) / 255.
+    depth = np.asarray(depth)
+    valid = np.isfinite(depth) & (depth > .01) & (rgb.max(axis=2) > .025)
+    coverage = float(valid.mean())
+    near = float((valid & (depth < clearance)).mean())
+    median = float(np.median(depth[valid])) if valid.any() else 0.
+    if max(rgb_u8.shape[:2]) > 128:
+        rgb = np.asarray(Image.fromarray(rgb_u8).resize((128, 128)), dtype=np.float32) / 255.
+    gray = rgb.mean(axis=2)
+    texture = float((np.abs(np.diff(gray, axis=0)).mean() +
+                     np.abs(np.diff(gray, axis=1)).mean()) / 2)
+    detail = float(np.abs(gray[:-2, 1:-1] + gray[2:, 1:-1] +
+                         gray[1:-1, :-2] + gray[1:-1, 2:] - 4 * gray[1:-1, 1:-1]).mean())
+    accepted = coverage >= .75 and near <= .12 and clearance <= median <= diag
+    # Compare image detail at a common resolution; no scene-specific texture cutoff.
+    score = coverage * (1 - near) * detail
+    return {'accepted': bool(accepted), 'coverage': coverage, 'near_fraction': near,
+            'median_depth': median, 'texture': texture, 'detail': detail, 'score': float(score)}
 
-    # ── 5. Farthest-point fill (ignore density) to guarantee the count ──────
-    if len(accepted) < n_positions:
-        pool = rng.uniform(lo, hi, size=(max(40 * n_positions, 200), 3))
-        while len(accepted) < n_positions and len(pool) > 0:
-            if accepted:
-                d = np.min(
-                    np.linalg.norm(pool[:, None, :] - np.asarray(accepted)[None, :, :], axis=2),
-                    axis=1,
-                )
-                pick = int(np.argmax(d))
-            else:
-                pick = 0
-            accepted.append(pool[pick])
-            pool = np.delete(pool, pick, axis=0)
 
-    # ── 6. Absolute last resort: legacy circle ──────────────────────────────
-    if len(accepted) < n_positions:
-        center = means_np.mean(axis=0)
-        radius = max(diag * 0.4, 0.5)
-        print(f"[render] WARNING: density placement found only {len(accepted)}/"
-              f"{n_positions} positions — filling rest with legacy circle.")
-        for p in _legacy_circle_positions(center, radius, n_positions, cfg.seed):
-            if len(accepted) >= n_positions:
-                break
-            accepted.append(np.asarray(p, dtype=np.float64))
+def _surface_keys(depth, pose, focal, diag):
+    """Coarse visible-surface cells for diversity, not a mesh or an occupancy map."""
+    h, w = depth.shape
+    y, x = np.mgrid[8:h:16, 8:w:16]
+    z = depth[y, x]
+    valid = np.isfinite(z) & (z > .01) & (z < diag)
+    xyz = np.column_stack([((x - w / 2) * z / focal)[valid],
+                           ((y - h / 2) * z / focal)[valid], z[valid]])
+    world = xyz @ pose[:3, :3].T + pose[:3, 3]
+    return {tuple(key) for key in np.floor(world / (diag * .025)).astype(np.int64)}
 
-    positions = np.asarray(accepted[:n_positions], dtype=np.float32)
 
-    # ── 7. Look targets: aim each camera at its nearest content centroid ────
-    k = min(64, len(sub))
-    look_targets = np.zeros_like(positions)
-    for i, p in enumerate(positions):
-        _, nn_idx = tree.query(p.astype(np.float64), k=k)
-        nn_idx = np.atleast_1d(nn_idx)
-        look_targets[i] = sub[nn_idx].mean(axis=0).astype(np.float32)
+def _select_preview_positions(candidates, surfaces, scores, n_positions, min_sep):
+    """Greedily retain new visible surfaces and avoid redundant camera positions."""
+    selected, seen = [], set()
+    while len(selected) < n_positions:
+        best, best_score = None, -1.
+        for i, position in enumerate(candidates):
+            if i in selected or scores[i] <= 0:
+                continue
+            if selected and np.min(np.linalg.norm(candidates[selected] - position, axis=1)) < min_sep:
+                continue
+            novelty = len(surfaces[i] - seen) / max(len(surfaces[i]), 1)
+            score = scores[i] * (.25 + .75 * novelty)
+            if score > best_score:
+                best, best_score = i, score
+        if best is None:
+            break
+        selected.append(best)
+        seen.update(surfaces[best])
+    return selected
 
-    return positions, look_targets
+
+def _preview_camera_positions(means, renderer, g, cfg, diagnostics_path=None):
+    candidates, targets = _generate_camera_positions(means, max(cfg.camera_candidates, cfg.n_positions), cfg)
+    _, _, diag, clearance, _ = _camera_geometry(means, cfg)
+    size = cfg.preview_size
+    focal = size / (2 * math.tan(math.radians(cfg.fov_x_degrees) / 2))
+    K = torch.tensor([[focal, 0, size / 2], [0, focal, size / 2], [0, 0, 1]],
+                     dtype=torch.float32, device=renderer.device)
+    poses, _ = _build_poses(candidates, 4, 1, el_min=0, el_max=0)
+    surfaces, quality = [set() for _ in candidates], [[] for _ in candidates]
+    report = {'clearance': clearance, 'candidate_count': len(candidates), 'candidates': []}
+    print(f'[render] Validating {len(candidates)} candidates with four {size}px previews each')
+    for b0 in range(0, len(poses), RENDER_BATCH):
+        batch = torch.tensor(np.stack(poses[b0:b0 + RENDER_BATCH]),
+                             dtype=torch.float32, device=renderer.device)
+        w2c = torch.linalg.inv(batch).contiguous()
+        rgb = renderer.render_rgb(g, w2c, K, size, size)
+        depths = renderer.render_depth(g, w2c, K, size, size)
+        for bi, depth in enumerate(depths):
+            index = b0 + bi
+            metric = _view_quality(rgb[bi], depth, clearance, diag)
+            quality[index // 4].append(metric)
+            if metric['accepted']:
+                surfaces[index // 4].update(_surface_keys(depth, poses[index], focal, diag))
+        print(f'[render] Previewed {min(b0 + RENDER_BATCH, len(poses)) // 4}/{len(candidates)} candidates')
+    scores = []
+    for i, metrics in enumerate(quality):
+        # Three usable horizontal directions help reject cameras outside a room.
+        good = [m['score'] for m in metrics if m['accepted']]
+        score = float(np.mean(good)) if len(good) >= 3 else 0.
+        scores.append(score)
+        report['candidates'].append({'position': candidates[i].tolist(), 'score': score, 'views': metrics})
+    # ponytail: relative sharpness is a room-scan heuristic, not proof of occupancy.
+    # Reject smeared through-wall views before coverage novelty can reward them.
+    nonzero = [s for s in scores if s > 0]
+    detail_cutoff = float(np.quantile(nonzero, .9) * .6) if nonzero else 0.
+    for i, score in enumerate(scores):
+        if score < detail_cutoff:
+            scores[i] = 0.
+            report['candidates'][i]['score'] = 0.
+            report['candidates'][i]['rejection_reason'] = 'insufficient_image_detail'
+    report['detail_cutoff'] = detail_cutoff
+    chosen = _select_preview_positions(candidates, surfaces, scores, cfg.n_positions,
+                                       cfg.min_sep_frac * diag)
+    report.update({'valid_candidates': sum(s > 0 for s in scores), 'selected_indices': chosen,
+                   'requested_positions': cfg.n_positions, 'selected_positions': len(chosen)})
+    if diagnostics_path is not None:
+        Path(diagnostics_path).write_text(json.dumps(report, indent=2) + '\n')
+    if not chosen:
+        raise ValueError('No camera candidates passed preview validation; refusing to analyze obstructed views')
+    print(f'[render] Selected {len(chosen)}/{cfg.n_positions} cameras from '
+          f'{report["valid_candidates"]} preview-valid candidates')
+    if len(chosen) < cfg.n_positions:
+        print('[render] WARNING: insufficient valid camera positions; reducing coverage rather than using unsafe fallback')
+    return candidates[chosen], targets[chosen], report, clearance, diag
 
 
 def _build_poses(positions: list, n_azimuth: int, n_elevation: int,
-                 el_min: float = -55.0, el_max: float = 40.0):
+                 el_min: float = -30.0, el_max: float = 30.0):
     """
     From each position do a full panoramic sweep over azimuth and elevation.
     Returns (all_poses, position_indices).
@@ -524,8 +518,8 @@ def render_views(ply_path: str, job_dir: str, cfg: PipelineConfig | None = None)
     center, radius = _scene_bounds(means_np)
     print(f"[render] Scene center={center.round(3)}, radius={radius:.3f}")
 
-    # Camera intrinsics — 130° horizontal FoV
-    fov_x = math.radians(130.0)
+    # A narrower view keeps small objects larger than the old 130-degree sweep.
+    fov_x = math.radians(cfg.fov_x_degrees)
     fl_x = width / (2.0 * math.tan(fov_x / 2.0))
     fl_y = fl_x
     cx, cy = width / 2.0, height / 2.0
@@ -535,10 +529,12 @@ def render_views(ply_path: str, job_dir: str, cfg: PipelineConfig | None = None)
         dtype=torch.float32, device=device,
     )
 
-    cam_positions, look_targets = _generate_camera_positions(means_np, n_positions, cfg)
+    visible_means = means_np[np.isfinite(arrays['opacities']) & (arrays['opacities'] > -2.2)]
+    cam_positions, look_targets, placement, clearance, diag = _preview_camera_positions(
+        visible_means, renderer, g, cfg, job_dir / 'camera_diagnostics.json')
     poses, position_indices = _build_poses(cam_positions, n_azimuth, n_elevation)
     total = len(poses)
-    print(f"[render] {n_positions} positions × {n_azimuth} azimuth × {n_elevation} elevation = {total} views"
+    print(f"[render] {len(cam_positions)} positions × {n_azimuth} azimuth × {n_elevation} elevation = {total} views"
           f"  (batch={RENDER_BATCH}, io_workers={IO_WORKERS}, device={device})")
 
     # Build all w2c matrices on GPU in one shot — avoids per-frame tensor creation
@@ -550,10 +546,13 @@ def render_views(ply_path: str, job_dir: str, cfg: PipelineConfig | None = None)
         "w": width, "h": height,
         "scene_center": center.tolist(),
         "scene_radius": float(radius),
-        "camera_placement": "clearance_first_with_density_fallback",
+        "camera_placement": "preview_validated_surface_coverage",
+        "camera_validation": placement,
+        "fov_x_degrees": cfg.fov_x_degrees,
         "camera_positions": [p.tolist() for p in cam_positions],
         "look_targets": [t.tolist() for t in look_targets],
         "frames": [],
+        "rejected_views": [],
     }
 
     futures = []
@@ -573,6 +572,12 @@ def render_views(ply_path: str, job_dir: str, cfg: PipelineConfig | None = None)
 
             # ── Submit I/O to thread pool (overlaps with next GPU batch) ───────
             for bi, idx in enumerate(range(b0, b1)):
+                metrics = _view_quality(rgb_cpu[bi], depth_cpu[bi], clearance, diag)
+                metrics['accepted'] = metrics['accepted'] and metrics['score'] >= placement['detail_cutoff'] * .5
+                if not metrics['accepted']:
+                    transforms['rejected_views'].append({'render_index': idx,
+                        'position_idx': int(position_indices[idx]), 'quality': metrics})
+                    continue
                 futures.append(pool.submit(
                     _write_frame, frames_dir, idx,
                     rgb_cpu[bi], depth_cpu[bi], _depth_to_vis(depth_cpu[bi]),
@@ -582,17 +587,25 @@ def render_views(ply_path: str, job_dir: str, cfg: PipelineConfig | None = None)
                     "depth_path":       f"frames/depth_{idx:04d}.png",
                     "transform_matrix": poses[idx].tolist(),
                     "position_idx":     int(position_indices[idx]),
+                    "quality":          metrics,
                 })
 
         # Drain futures — re-raises any disk write errors
         for f in as_completed(futures):
             f.result()
 
+    accepted = len(transforms['frames'])
+    transforms['camera_validation']['rendered_views'] = total
+    transforms['camera_validation']['accepted_views'] = accepted
+    transforms['camera_validation']['rejected_views'] = total - accepted
+    (job_dir / 'camera_diagnostics.json').write_text(json.dumps(placement, indent=2) + '\n')
     transforms_path = job_dir / "transforms.json"
     with open(transforms_path, "w") as f:
         json.dump(transforms, f, indent=2)
 
-    print(f"[render] Done. Wrote {total} RGB + depth frames + transforms.json")
+    print(f"[render] Done. Accepted {accepted}/{total} RGB + depth views; rejected {total - accepted}")
+    if accepted < cfg.min_votes:
+        raise ValueError(f'Only {accepted} usable views; insufficient coverage for {cfg.min_votes} votes')
     return str(transforms_path)
 
 

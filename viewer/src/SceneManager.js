@@ -55,6 +55,28 @@ export class SceneManager {
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
+    this._keys = new Set();
+    this.moveSpeed = 1;
+    this.navigationTouched = false;
+    const movementKeys = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ShiftLeft', 'ShiftRight']);
+    window.addEventListener('keydown', (event) => {
+      if (!movementKeys.has(event.code) || event.ctrlKey || event.metaKey || event.altKey ||
+          event.target.closest?.('input, select, textarea, button, [contenteditable="true"]')) return;
+      event.preventDefault();
+      this._keys.add(event.code);
+      this.navigationTouched = true;
+    });
+    window.addEventListener('keyup', (event) => this._keys.delete(event.code));
+    window.addEventListener('blur', () => this._keys.clear());
+    document.addEventListener('visibilitychange', () => this._keys.clear());
+    this.renderer.domElement.tabIndex = 0;
+    this.renderer.domElement.addEventListener('pointerdown', () => {
+      this.renderer.domElement.focus({ preventScroll: true });
+      this.navigationTouched = true;
+    });
+    this._move = new THREE.Vector3();
+    this._forward = new THREE.Vector3();
+    this._right = new THREE.Vector3();
     // Render at reduced resolution during interaction, restore when it stops.
     this.controls.addEventListener("change", () => this._onCameraMove());
 
@@ -78,6 +100,8 @@ export class SceneManager {
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    this.moveSpeed = Math.max(maxDim * .12, .05);
+    this.navigationTouched = false;
 
     this.controls.target.copy(center);
     const dir = new THREE.Vector3(0.4, 0.5, 1).normalize();
@@ -89,10 +113,13 @@ export class SceneManager {
   }
 
   start() {
+    let previous = performance.now();
     const loop = () => {
       requestAnimationFrame(loop);
       this._fpsFrames += 1;
       const now = performance.now();
+      this._moveCamera(Math.min((now - previous) / 1000, .05));
+      previous = now;
       if (now - this._fpsLast >= 500) {
         this.fps = (this._fpsFrames * 1000) / (now - this._fpsLast);
         this._fpsFrames = 0;
@@ -104,6 +131,26 @@ export class SceneManager {
       this.labelRenderer.render(this.scene, this.camera);
     };
     loop();
+  }
+
+  _moveCamera(seconds) {
+    if (!this._keys.size) return;
+    this.camera.getWorldDirection(this._forward);
+    this._forward.y = 0;
+    if (this._forward.lengthSq() < .000001) this._forward.set(0, 0, -1);
+    this._forward.normalize();
+    this._right.crossVectors(this._forward, this.camera.up).normalize();
+    this._move.set(0, 0, 0);
+    const axis = (positive, negative) => Number(this._keys.has(positive)) - Number(this._keys.has(negative));
+    this._move.addScaledVector(this._forward, axis('KeyW', 'KeyS'));
+    this._move.addScaledVector(this._right, axis('KeyD', 'KeyA'));
+    this._move.y += axis('KeyE', 'KeyQ');
+    const fast = this._keys.has('ShiftLeft') || this._keys.has('ShiftRight');
+    if (!this._move.lengthSq()) return;
+    this._move.normalize().multiplyScalar(this.moveSpeed * seconds * (fast ? 3 : 1));
+    this.camera.position.add(this._move);
+    this.controls.target.add(this._move);
+    this._onCameraMove();
   }
 
   _onCameraMove() {

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { SOURCE_ROTATION_X } from './SceneCoordinates.js';
 import {
   SplatMesh,
   SplatEdit,
@@ -149,7 +150,7 @@ export class SplatView {
     const isBaked = fileName.toLowerCase().endsWith(".rad");
     const radCount = isBaked ? parseRadSplatCount(bytes) : null;
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       if (loadId !== this._loadId) {
         resolve();
         return;
@@ -166,16 +167,15 @@ export class SplatView {
             resolve();
             return;
           }
-          loaded.rotation.x = Math.PI;
+          loaded.rotation.x = SOURCE_ROTATION_X;
           loaded.edits = [];
           loaded.updateMatrixWorld(true);
           this.numSplats =
             radCount ??
-            loaded.numSplats ??
-            loaded.packedSplats?.numSplats ??
-            loaded.splats?.numSplats ??
+            (loaded.numSplats || loaded.packedSplats?.numSplats ||
+            loaded.packedSplats?.lodSplats?.numSplats || loaded.splats?.numSplats) ??
             0;
-          const box = new THREE.Box3().setFromObject(loaded);
+          const box = loaded.getBoundingBox().applyMatrix4(loaded.matrixWorld);
           this.sceneManager.frameBounds(box);
           resolve();
         },
@@ -189,6 +189,11 @@ export class SplatView {
 
       this.mesh = mesh;
       this.sceneManager.add(mesh);
+      mesh.initialized.catch((error) => {
+        if (loadId !== this._loadId) { resolve(); return; }
+        this._removeMesh();
+        reject(error);
+      });
     });
   }
 

@@ -32,13 +32,15 @@ class PipelineConfig:
     n_positions: int = 5
     n_azimuth: int = 6
     n_elevation: int = 3
+    fov_x_degrees: float = 90.0
 
-    # ── camera placement (density-aware band-pass sampler) ─────────────────
+    # ── automatic camera placement / preview validation ───────────────────
     bbox_pct_lo: float = 1.0                # robust bounding-box lower percentile
     bbox_pct_hi: float = 99.0               # robust bounding-box upper percentile
-    min_sep_frac: float = 0.12              # Poisson-disk min camera separation (frac of bbox diagonal)
-    density_radius_frac: float = 0.05       # neighbour-count radius (frac of bbox diagonal)
-    bandpass_alpha: float = 1.0             # band-pass width; larger = more permissive
+    min_sep_frac: float = 0.04              # min camera separation (fraction of bbox diagonal)
+    camera_clearance_frac: float = 0.12     # clearance relative to shortest robust bbox side
+    camera_candidates: int = 64
+    preview_size: int = 128
     seed: int = 42                          # deterministic placement
 
     # ── detection / clustering ─────────────────────────────────────────────

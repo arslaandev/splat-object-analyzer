@@ -11,6 +11,9 @@ import time
 import numpy as np
 from PIL import Image
 from scipy.spatial import cKDTree
+from scipy.spatial.transform import Rotation
+from scipy.ndimage import binary_erosion
+import cv2
 
 SAM_MODEL = 'facebook/sam-vit-base'
 SAM_REVISION = 'd0d9250bd6a38ebbb901aa29e8d37787e366f7be'
@@ -44,6 +47,9 @@ def voxel_points(points, voxel_size):
 
 
 def mask_points(mask, depth, transform, metadata):
+    interior = binary_erosion(mask, iterations=1)
+    if interior.sum() >= 32:
+        mask = interior  # Avoid mixed foreground/background depth at mask edges.
     ys, xs = np.nonzero(mask & np.isfinite(depth) & (depth > .01))
     if len(xs) > 12000:
         picks = np.linspace(0, len(xs) - 1, 12000, dtype=int)
@@ -52,6 +58,41 @@ def mask_points(mask, depth, transform, metadata):
     camera = np.column_stack(((xs - metadata['cx']) * z / metadata['fl_x'],
                               (ys - metadata['cy']) * z / metadata['fl_y'], z))
     return camera @ transform[:3, :3].T + transform[:3, 3]
+
+
+def fit_oriented_box(points, minimum_size):
+    """Fit an upright box to observed surfaces, keeping source Y as the up axis.
+
+    ponytail: room scans already use source Y for camera height; tilted scenes
+    need an inferred up direction. This is a surface estimate, not hidden geometry.
+    """
+    points = np.asarray(points, dtype=np.float64)
+    points = points[np.isfinite(points).all(axis=1)]
+    if len(points) < 4:
+        return None
+    percentiles = [0, 100] if len(points) < 100 else [1, 99]
+    low, high = np.percentile(points, percentiles, axis=0)
+    trimmed = points[np.all((points >= low) & (points <= high), axis=1)]
+    if len(trimmed) < 4:
+        trimmed = points
+    rectangle = cv2.minAreaRect(trimmed[:, [0, 2]].astype(np.float32))
+    angle = (np.radians(rectangle[2]) + np.pi / 4) % (np.pi / 2) - np.pi / 4
+    # Avoid arbitrary rotations on already aligned or almost round surfaces.
+    area = np.prod(np.maximum(np.ptp(trimmed[:, [0, 2]], axis=0), minimum_size))
+    if abs(angle) < np.radians(2) or np.prod(rectangle[1]) >= area * .95:
+        angle = 0.
+    c, s = np.cos(angle), np.sin(angle)
+    axes = np.array([[c, 0, -s], [0, 1, 0], [s, 0, c]])
+    origin = np.median(trimmed, axis=0)
+    local = (points - origin) @ axes
+    lower, upper = np.percentile(local, percentiles, axis=0)
+    size = np.maximum(upper - lower, minimum_size)
+    center = origin + axes @ ((lower + upper) / 2)
+    quaternion = Rotation.from_matrix(axes).as_quat()
+    return {'type': 'upright_visible_surface_estimate',
+            'position': dict(zip('xyz', map(float, center))),
+            'scale': dict(zip('xyz', map(float, size))),
+            'rotation': dict(zip('xyzw', map(float, quaternion)))}
 
 
 def surface_overlap(a, b, tolerance):
@@ -63,6 +104,27 @@ def surface_overlap(a, b, tolerance):
     da = cKDTree(b).query(a, distance_upper_bound=tolerance)[0]
     db = cKDTree(a).query(b, distance_upper_bound=tolerance)[0]
     return float(np.isfinite(da).mean()), float(np.isfinite(db).mean())
+
+
+def coherent_samples(samples, obj, voxel_size):
+    """Do not fuse a coarse detection cluster's views of different nearby objects.
+
+    Match each observation against the strongest view, without transitive drift.
+    Opposite, non-overlapping faces may be excluded: boxes bound supported visible
+    surfaces rather than inventing geometry between contradictory observations.
+    """
+    scores = {frame['frame_idx']: frame['score'] for frame in obj['frames']}
+    ordered = sorted(samples, key=lambda s: -(scores.get(s['frame'], 0) * s['quality']))
+    if not ordered:
+        return []
+    anchor = voxel_points(ordered[0]['points'], voxel_size)
+    chosen = [ordered[0]]
+    for sample in ordered[1:]:
+        points = voxel_points(sample['points'], voxel_size)
+        ab, ba = surface_overlap(anchor, points, voxel_size * 1.5)
+        if min(ab, ba) >= .2 or max(ab, ba) >= .65:
+            chosen.append(sample)
+    return chosen
 
 
 def same_instance(a, b, tolerance):
@@ -199,6 +261,7 @@ def _object_from_group(group, index, voxel_size):
     obj.update(id=f'object_{index + 1:04d}', label=label, alternative_labels=sorted(set(labels) - {label}),
                source_candidate_ids=[m['id'] for m in members], parent_id=None, children=[],
                mask_evidence=group.get('evidence', []),
+               geometry_supporting_view_count=len({e['frame_idx'] for e in group.get('evidence', [])}),
                frames=sorted(frames.values(), key=lambda f: -f['score']), supporting_view_count=len(frames),
                identity_method='segmented_surface_overlap' if len(points) else 'unresolved_candidate')
     if len(points):
@@ -209,6 +272,7 @@ def _object_from_group(group, index, voxel_size):
         obj['bounding_box'] = {'type': 'visible_surface_estimate',
                                'min': dict(zip('xyz', map(float, low))),
                                'max': dict(zip('xyz', map(float, high)))}
+        obj['oriented_box'] = fit_oriented_box(points, voxel_size)
     return obj
 
 
@@ -245,8 +309,11 @@ def refine_inventory(result, root, device):
     voxel_size = max(float(transforms['scene_radius']) * .015, 1e-5)
     observations = _segment_candidates(result['objects'], root, transforms, device, result['input']['sha256'])
     nodes = []
+    rejected_observations = 0
     for obj in result['objects']:
-        samples = observations[obj['id']]
+        all_samples = observations[obj['id']]
+        samples = coherent_samples(all_samples, obj, voxel_size)
+        rejected_observations += len(all_samples) - len(samples)
         points = voxel_points(np.vstack([s['points'] for s in samples]), voxel_size) if samples else np.empty((0, 3))
         nodes.append({'object': obj, 'members': [obj], 'points': points,
                       'masks': {s['frame']: s['mask'] for s in samples},
@@ -270,6 +337,7 @@ def refine_inventory(result, root, device):
         'input_candidates': len(result['objects']), 'resolved_records': len(refined),
         'top_level_objects': sum(o['parent_id'] is None for o in refined),
         'child_objects': sum(o['parent_id'] is not None for o in refined),
+        'rejected_inconsistent_surface_observations': rejected_observations,
         'seconds': time.perf_counter() - started,
     }
     output['limitations'] = ['Boxes bound observed segmented surfaces; hidden geometry is not measured.',
