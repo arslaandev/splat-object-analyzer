@@ -49,6 +49,7 @@ export class AnnotationParser {
           colorByLabel.set(o.label, PALETTE[colorIdx++ % PALETTE.length]);
         }
         return new Annotation({
+          id: o.id || null,
           label: o.label,
           parentId: o.parent_id || null,
           color: colorByLabel.get(o.label),

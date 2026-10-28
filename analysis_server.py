@@ -1,4 +1,4 @@
-"""Local viewer and one-at-a-time Gaussian splat analysis jobs (stdlib only)."""
+"""Local viewer, Gaussian splat analysis, and scene-understanding jobs."""
 import argparse
 from functools import partial
 import http.server
@@ -8,10 +8,14 @@ import math
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
+
 import threading
 from urllib.parse import parse_qs, urlsplit
 import uuid
+
+from understanding_jobs import UnderstandingJobs
 
 
 ROOT = Path(__file__).resolve().parent
@@ -29,7 +33,7 @@ def frame_camera(pose):
 def make_config(result, result_path, scene, prefix=''):
     config = {'splatUrl': prefix + '/scene' + scene.suffix.lower(),
               'annotationsUrl': prefix + '/interactions.json', 'name': scene.name,
-              'sourceHash': result['input']['sha256']}
+              'sourceHash': result['input']['sha256'], 'sceneId': prefix.rsplit('/', 1)[-1] if prefix else 'initial'}
     transforms_path = result_path.parent / 'transforms.json'
     if transforms_path.exists():
         transforms = json.loads(transforms_path.read_text())
@@ -75,10 +79,12 @@ class AnalysisJobs:
         self.active = None
         self.latest = None
         self.lock = threading.Lock()
+        self.understanding_active = None
+        self.understanding = UnderstandingJobs(self, ROOT)
 
     def reserve(self, name, quality):
         with self.lock:
-            if self.active is not None:
+            if self.active is not None or self.understanding_active is not None:
                 raise RuntimeError('Another scene is being processed. Wait for it to finish.')
             job_id = uuid.uuid4().hex
             path = self.directory / job_id
@@ -128,7 +134,7 @@ class AnalysisJobs:
         if self.initial:
             pair = make_config(*self.initial)['scene']
             scenes.append({'id': 'initial', 'label': pair['name'], **pair})
-        return {**config, 'scenes': scenes, 'analysisAvailable': True, 'defaultQuality': 'high', 'activeJob': active}
+        return {**config, 'scenes': scenes, 'analysisAvailable': True, 'defaultQuality': 'high', 'activeJob': active, 'understandingAvailable': True}
 
     def run(self, job_id):
         job = self.jobs[job_id]
@@ -196,6 +202,24 @@ def handler_for(jobs, port):
                 self.json_response({'error': 'Only same-origin viewer requests are allowed'}, 403)
                 return
             url = urlsplit(self.path)
+            if url.path == '/api/understanding':
+                try:
+                    size = int(self.headers.get('Content-Length', '0'))
+                    if not 0 < size <= 8192:
+                        raise ValueError('Expected a JSON request smaller than 8 KiB')
+                    value = json.loads(self.rfile.read(size))
+                    if not isinstance(value, dict):
+                        raise ValueError('Expected a JSON object')
+                    scene_id, source_hash, prompt = value.get('sceneId'), value.get('sourceHash'), value.get('prompt', '')
+                    if not isinstance(scene_id, str) or not isinstance(source_hash, str) or not isinstance(prompt, str) or len(prompt) > 1000:
+                        raise ValueError('Provide a scene ID, source hash, and prompt up to 1000 characters')
+                    request_id = jobs.understanding.submit(scene_id, source_hash, prompt.strip())
+                    self.json_response({'id': request_id}, 202)
+                except RuntimeError as error:
+                    self.json_response({'error': str(error)}, 409)
+                except (ValueError, OSError) as error:
+                    self.json_response({'error': str(error)}, 400)
+                return
             if url.path != '/api/jobs':
                 self.json_response({'error': 'Unknown endpoint'}, 404)
                 return
@@ -243,6 +267,13 @@ def handler_for(jobs, port):
                 self.json_response({'error': 'Unexpected host'}, 403)
                 return
             route = urlsplit(self.path).path
+            match = re.fullmatch(r'/api/understanding/([a-f0-9]{32})', route)
+            if match:
+                try:
+                    self.json_response(jobs.understanding.snapshot(match[1]))
+                except KeyError:
+                    self.json_response({'error': 'Scene-understanding request not found'}, 404)
+                return
             match = re.fullmatch(r'/api/jobs/([a-f0-9]{32})', route)
             if match:
                 try:
@@ -264,6 +295,20 @@ def handler_for(jobs, port):
                 data = json.dumps(jobs.configuration()).encode()
                 content, content_type, length = io.BytesIO(data), 'application/json', len(data)
             else:
+                asset = re.fullmatch(r'/api/scene-assets/(initial|[a-f0-9]{32})/(view-[0-9]{4,6}\.jpg)', route)
+                if asset:
+                    try:
+                        _, result_path, _ = jobs.understanding.scene(asset[1])
+                        path = result_path.parent / 'understanding' / asset[2]
+                        content = path.open('rb')
+                    except (ValueError, OSError):
+                        self.send_error(404)
+                        return None
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'image/jpeg')
+                    self.send_header('Content-Length', str(path.stat().st_size))
+                    self.end_headers()
+                    return content
                 match = re.fullmatch(r'/api/jobs/([a-f0-9]{32})/(scene\.(?:ply|spz)|interactions\.json)', route)
                 pair = jobs.initial
                 if match:
@@ -314,7 +359,12 @@ def main():
     with http.server.ThreadingHTTPServer(('127.0.0.1', args.port), handler) as server:
         print(f'Viewer: http://127.0.0.1:{args.port}/', flush=True)
         print(f'Analysis uploads and results: {jobs.directory}', flush=True)
+        def stop(signum, frame):
+            raise KeyboardInterrupt
+        signal.signal(signal.SIGTERM, stop)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             pass
+        finally:
+            jobs.understanding.close()
