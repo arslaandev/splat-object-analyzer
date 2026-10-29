@@ -2,6 +2,7 @@
 from contextlib import asynccontextmanager
 import asyncio
 from dataclasses import dataclass
+from functools import lru_cache
 import hashlib
 import hmac
 import json
@@ -22,12 +23,22 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from api.schemas import AnalysisResult, ErrorResponse, Job, QueryRequest, QueryResult
+from api.schemas import (AnalysisResult, ErrorResponse, Job, QueryRequest, QueryResult,
+    NavigationSummary, NavigationGridResult, NavigationValidationRequest, NavigationValidation, NavigationPathRequest, NavigationPath)
 from api.storage import QueueFull, Store, now
 from api.worker import Worker
 
 ROOT = Path(__file__).resolve().parent
 JobId = Annotated[str, PathParam(pattern=r'^[a-f0-9]{32}$')]
+
+
+@lru_cache(maxsize=2)
+def navigation_map(directory, fingerprint):
+    from navigation import NavigationMap
+    value = NavigationMap.load(directory)
+    if value.metadata['fingerprint'] != fingerprint:
+        raise ValueError('Navigation map fingerprint mismatch')
+    return value
 
 
 @dataclass
@@ -143,7 +154,7 @@ def create_app(settings=None, app_root=ROOT):
     @router.post('/analyses', response_model=Job, status_code=202, tags=['analysis'], dependencies=[Depends(upload_slot)],
         openapi_extra={'requestBody':{'required':True,'content':{'application/octet-stream':{'schema':{'type':'string','format':'binary'}}}}})
     async def submit(request: Request, filename: str = Query(min_length=5, max_length=180),
-                     quality: Literal['low','medium','high'] = 'high', understanding: bool = True):
+                     quality: Literal['low','medium','high'] = 'high', understanding: bool = True, navigation: bool = True):
         if app.state.store.pending_count() >= settings.max_pending_jobs:
             raise APIError(429, 'queue_full', 'The processing queue is full. Retry later.')
         if (Path(filename).name != filename or '\\' in filename or any(ord(c) < 32 for c in filename) or
@@ -178,7 +189,8 @@ def create_app(settings=None, app_root=ROOT):
             partial.replace(directory/('source.'+suffix))
             record = dict(id=job_id, kind='analysis', analysis_id=job_id, status='queued', created_at=now(),
                 started_at=None, finished_at=None, progress=dict(stage='Queued',completed=None,total=None), error=None,
-                filename=filename, format=suffix, bytes=size, sha256=digest.hexdigest(), quality=quality, understanding=understanding)
+                filename=filename, format=suffix, bytes=size, sha256=digest.hexdigest(), quality=quality, understanding=understanding,
+                navigation=navigation)
             try:
                 app.state.store.create(record)
             except QueueFull:
@@ -199,6 +211,40 @@ def create_app(settings=None, app_root=ROOT):
     def result(analysis_id: JobId):
         completed(analysis_id, 'analysis')
         return AnalysisResult.model_validate_json((app.state.store.directory(analysis_id)/'result.json').read_text())
+
+    def navigation_assets(analysis_id):
+        record = completed(analysis_id, 'analysis')
+        root = app.state.store.directory(analysis_id)/'analysis'
+        if not record.get('navigation', True) or not (root/'navigation.json').is_file():
+            raise APIError(404, 'navigation_unavailable', 'This analysis has no navigation map. Submit a new analysis with navigation=true.')
+        metadata = json.loads((root/'navigation.json').read_text())
+        if metadata['source_sha256'] != record['sha256']:
+            raise ValueError('Navigation source fingerprint mismatch')
+        return root, metadata
+
+    @router.get('/analyses/{analysis_id}/navigation', response_model=NavigationSummary, tags=['navigation'])
+    def navigation_summary(analysis_id: JobId):
+        _, metadata = navigation_assets(analysis_id)
+        return {**metadata, 'grid_url':f'/v1/analyses/{analysis_id}/navigation/grid'}
+
+    @router.get('/analyses/{analysis_id}/navigation/grid', response_class=FileResponse, tags=['navigation'],
+        responses={200:{'model':NavigationGridResult}},
+        description='Full candidate map as JSON. runs contains alternating state and count values in C-order with shape [nx,ny,nz]; z varies fastest. Cell centers are origin+(index+0.5)*voxel_size.')
+    def navigation_grid(analysis_id: JobId):
+        root, _ = navigation_assets(analysis_id)
+        if not (root/'navigation-grid.json').is_file():
+            raise APIError(404, 'navigation_unavailable', 'Navigation grid asset is unavailable')
+        return FileResponse(root/'navigation-grid.json', media_type='application/json', filename='navigation-grid.json')
+
+    @router.post('/analyses/{analysis_id}/navigation/validate', response_model=NavigationValidation, tags=['navigation'])
+    def validate_navigation(analysis_id: JobId, value: NavigationValidationRequest):
+        root, metadata = navigation_assets(analysis_id)
+        return navigation_map(root, metadata['fingerprint']).validate(value.points)
+
+    @router.post('/analyses/{analysis_id}/navigation/path', response_model=NavigationPath, tags=['navigation'])
+    def plan_navigation(analysis_id: JobId, value: NavigationPathRequest):
+        root, metadata = navigation_assets(analysis_id)
+        return navigation_map(root, metadata['fingerprint']).find_path(value.start, value.goal)
 
     @router.post('/analyses/{analysis_id}/queries', response_model=Job, status_code=202, tags=['queries'])
     def query(analysis_id: JobId, value: QueryRequest):

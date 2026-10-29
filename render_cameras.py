@@ -14,6 +14,7 @@ transforms.json gains two extra keys:
 """
 
 import argparse
+import hashlib
 import gzip
 import json
 import math
@@ -482,7 +483,7 @@ def _write_frame(frames_dir: Path, idx: int,
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def render_views(ply_path: str, job_dir: str, cfg: PipelineConfig | None = None):
+def render_views(ply_path: str, job_dir: str, cfg: PipelineConfig | None = None, source_hash=None):
     """
     Render RGB + depth from multiple camera positions and write:
       <job_dir>/frames/frame_XXXX.png
@@ -502,6 +503,11 @@ def render_views(ply_path: str, job_dir: str, cfg: PipelineConfig | None = None)
     frames_dir = job_dir / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
 
+    navigation = None
+    if cfg.navigation and source_hash is None:
+        with Path(ply_path).open('rb') as stream:
+            source_hash = hashlib.file_digest(stream, 'sha256').hexdigest()
+
     if Path(ply_path).suffix.lower() == ".spz":
         converted = str(job_dir / 'input.ply')
         _convert_spz_to_ply(ply_path, converted)
@@ -510,6 +516,10 @@ def render_views(ply_path: str, job_dir: str, cfg: PipelineConfig | None = None)
     renderer = get_renderer(cfg.renderer)
     print(f"[render] Loading PLY: {ply_path}")
     arrays = _load_ply_arrays(ply_path)
+    if cfg.navigation:
+        from navigation import build_navigation, NavigationConfig
+        navigation = build_navigation(arrays, job_dir, source_hash,
+            NavigationConfig(resolution=cfg.navigation_resolution)).metadata
     means_np = arrays["means"]
     g = renderer.prepare(arrays)
     device = renderer.device
@@ -550,6 +560,7 @@ def render_views(ply_path: str, job_dir: str, cfg: PipelineConfig | None = None)
         "camera_validation": placement,
         "fov_x_degrees": cfg.fov_x_degrees,
         "camera_positions": [p.tolist() for p in cam_positions],
+        "navigation": navigation,
         "look_targets": [t.tolist() for t in look_targets],
         "frames": [],
         "rejected_views": [],

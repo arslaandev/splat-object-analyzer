@@ -1,2 +1,5 @@
 -r requirements-api.txt
 httpx==0.28.1
+# Geometry/query regression tests; compatible with either platform's analysis pins.
+numpy>=1.26.4,<3
+scipy>=1.15.3,<2

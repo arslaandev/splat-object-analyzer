@@ -4,6 +4,7 @@ The API runs the existing pipeline without serving the viewer. Upload one Gaussi
 splat and receive an asynchronous job. By default the job includes automatic
 object discovery, segmentation, positions, boxes, richer descriptions, functional
 groups, scene context, hero subjects, relationships, and suggested still views.
+It also estimates camera space from Gaussian geometry without original camera poses.
 
 Interactive documentation: `/docs`. Machine-readable contract: `/openapi.json`.
 A generated copy is checked in as `openapi.json` for frontend/client development.
@@ -31,6 +32,10 @@ requests. `SPLAT_DATA_DIR` defaults to `outputs/api/`. For GCP and HTTPS, see
 | POST | `/v1/analyses?filename=room.spz` | Upload a file and queue the full analysis; returns 202 |
 | GET | `/v1/jobs/{job_id}` | Poll either an analysis or a prompt-query job |
 | GET | `/v1/analyses/{analysis_id}` | Fetch the structured analysis result |
+| GET | `/v1/analyses/{analysis_id}/navigation` | Camera-space metadata, connected regions, and automatic starting points |
+| GET | `/v1/analyses/{analysis_id}/navigation/grid` | Full source-space candidate grid as RLE JSON |
+| POST | `/v1/analyses/{analysis_id}/navigation/validate` | Validate points and every segment between them |
+| POST | `/v1/analyses/{analysis_id}/navigation/path` | Find a bounded, collision-checked grid route |
 | POST | `/v1/analyses/{analysis_id}/queries` | Queue a prompt such as “show off my desk setup”; returns 202 |
 | GET | `/v1/queries/{query_id}` | Fetch selected object/group IDs and suggested views |
 | GET | `/v1/analyses/{analysis_id}/frames/{frame_index}` | Fetch a supporting rendered PNG |
@@ -49,6 +54,8 @@ formats are standard 3DGS PLY and SPZ v1–v3. The default upload limit is 2 GiB
 `quality=high` is the default; `low` and `medium` are also accepted. Set
 `understanding=false` to omit the slower description/grouping stage and return
 the object inventory and geometry. Such an analysis cannot accept prompt queries.
+Navigation is independent of semantic enrichment and enabled by default; set
+`navigation=false` to omit it. Quality controls image coverage, not grid resolution.
 
 ```bash
 export API_URL=http://127.0.0.1:8000
@@ -103,6 +110,7 @@ The result includes:
 | `coordinates` | Geometry/camera spaces, units, quaternion order, transform |
 | `rendered_view_count` | Number of accepted rendered analysis views |
 | `understanding_included` | Whether semantic enrichment was requested and completed |
+| `navigation` | Candidate camera-space metadata and grid URL; null when omitted or absent from an older result |
 | `scene` | Inferred space type, description, confidence; null without enrichment |
 | `objects` | IDs, labels, categories, descriptions, review status, geometry, confidence, parent/child links, evidence URLs |
 | `groups` | Functional areas such as a desk setup, with member object IDs |
@@ -152,6 +160,70 @@ time. Alternatively transform the cameras back into source space for your render
 Suggested views are existing analysis renders with depth visibility checks.
 They are not camera animations or collision-checked paths.
 
+## Candidate camera space
+
+Navigation uses the **source** coordinate space, including its original rotation
+and scale. No gravity direction, metric scale, original camera poses, or manually
+selected starting point is required. `navigation.regions[].seed` is an automatic
+starting position for each connected region. To place it in the prototype viewer,
+apply the documented source-to-viewer transform once.
+
+The map voxelizes a conservative superset of cutoff Gaussian ellipsoids, flood
+excludes camera clearance margins, flood fills from the outer grid boundary, and
+rejects small enclosed cavities. The fill operates in camera configuration space:
+cracks smaller than the camera are blocked by clearance without adding obstacle
+geometry. Outside flood fill uses 26 neighbors so diagonal openings that fit the
+camera remain open. Paths use face-connected neighbors and continuous supercover checks
+to prevent corner cutting. Tiny islands left after clearance are excluded.
+Very large primitives use a conservative AABB fallback to bound work; the count
+is included in diagnostics. No surfaces are reconstructed across scan holes.
+
+`status=candidate_space` means at least one region passed these geometric checks.
+It does **not** certify that a region is a room or that unrecorded obstacles are
+absent. `status=uncertain` is a successful analysis with no approved camera region;
+clients must not treat its unknown cells as free. A missing wall or roof may
+produce this result. Clearances are source units, not meters. The default radius
+is one voxel; `voxel_clearance_margin` accounts for both obstacle and camera-cell
+discretization. The default grid targets 128 cells along the longest robust scene
+side and is capped at two million cells. Resolution and conservative Gaussian
+cutoffs can close very small openings; this is an estimate at the reported scale.
+
+Fetch `navigation.grid_url` with the same bearer header as other assets. The JSON
+contains metadata plus `encoding="rle_xyz_c"` and `runs=[state,count,state,count,...]`.
+Expand the runs to `shape[0]*shape[1]*shape[2]` uint8 cells. The flat index for
+`[i,j,k]` is `(i*shape[1]+j)*shape[2]+k`; z varies fastest. A cell center is
+`origin + ([i,j,k]+0.5)*voxel_size`. The state codes are:
+
+| Code | Meaning | Traversable |
+| --- | --- | --- |
+| 0 | Unknown, exterior, or rejected enclosed cavity | No |
+| 1 | Modeled obstacle | No |
+| 2 | Candidate camera space for the reported radius | Yes, relative to this map |
+| 3 | Excluded clearance margins or isolated clearance pockets | No |
+
+Position/path requests use arrays of three finite source coordinates:
+
+```bash
+curl --fail-with-body "$API_URL/v1/analyses/$ANALYSIS_ID/navigation/validate" \
+  -H "Authorization: Bearer $SPLAT_API_KEY" -H 'Content-Type: application/json' \
+  --data '{"space":"source","points":[[0,0,0],[1,0,0]]}'
+
+curl --fail-with-body "$API_URL/v1/analyses/$ANALYSIS_ID/navigation/path" \
+  -H "Authorization: Bearer $SPLAT_API_KEY" -H 'Content-Type: application/json' \
+  --data '{"space":"source","start":[0,0,0],"goal":[1,0,0]}'
+```
+
+Replace the example points with source coordinates in your map. Validation
+returns `valid`, `reason`, and an offending point or segment index when applicable.
+A path response returns `found`, `reason`, `points`, and
+`basis="geometry_candidate_map"`. A blocked/unreachable request returns 200 with
+`valid=false` or `found=false`; it never substitutes an unchecked straight path.
+Search stops after 50,000 expansions and reports `search_limit_reached` separately
+from disconnected regions. These endpoints return 404 when navigation was omitted
+or is absent from an older analysis. Existing completed analyses are not migrated.
+Camera orientation, framing, render quality, animation and smoothed trajectories
+are separate concerns; suggested still views have not been constrained to this map.
+
 ## Operations and errors
 
 Jobs/results and SQLite queue state survive process/container restarts when the
@@ -178,4 +250,6 @@ Run API lifecycle checks without downloading models:
 ```bash
 uv pip install --python .venv/bin/python -r requirements-api-test.txt
 .venv/bin/python check-api.py
+.venv/bin/python check-navigation.py
+node check-navigation.mjs
 ```

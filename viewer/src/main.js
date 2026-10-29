@@ -4,6 +4,7 @@ import { AnnotationParser } from "./AnnotationParser.js";
 import { AnnotationLayer } from "./AnnotationLayer.js";
 import { SettingsMenu } from "./SettingsMenu.js";
 import { SceneUnderstanding } from "./SceneUnderstanding.js";
+import { NavigationLayer } from './NavigationLayer.js';
 
 const configuration = await fetch(new URL('../viewer-config.json', import.meta.url))
   .then(response => response.ok ? response.json() : {scene: null})
@@ -90,6 +91,7 @@ function loaderOptions(gen) {
 function resetScene() {
   generation += 1;
   understanding.reset();
+  navigationLayer.clear();
   selectedIds = null;
   splatView.clear();
   loadedAnnotations = [];
@@ -127,6 +129,7 @@ async function loadPair(pair, gen, keepScene = false) {
   annotationLayer.playReveal();
   hideLoading();
   if (configuration.understandingAvailable) understanding.setScene({...pair, sourceHash});
+  await navigationLayer.load(pair.navigationUrl, sourceHash);
   return result;
 }
 async function loadExample(id) {
@@ -236,6 +239,7 @@ const settingsMenu = new SettingsMenu({
     } catch (error) { showStatus('Annotations could not be loaded', error.message, 'failed'); }
   },
 });
+const navigationLayer = new NavigationLayer(sceneManager, settingsMenu.navigationHost);
 document.getElementById('choose-scene').addEventListener('click', () => settingsMenu.chooseSplat());
 const playBtn = document.createElement('button');
 playBtn.id = 'play-btn'; playBtn.className = 'fab'; playBtn.title = 'Play label appear animation';

@@ -77,6 +77,9 @@ export class SceneManager {
     this._move = new THREE.Vector3();
     this._forward = new THREE.Vector3();
     this._right = new THREE.Vector3();
+    this._navigation = null;
+    this._navigationPosition = this.camera.position.clone();
+    this._navigationTarget = this.controls.target.clone();
     // Render at reduced resolution during interaction, restore when it stops.
     this.controls.addEventListener("change", () => this._onCameraMove());
 
@@ -93,6 +96,22 @@ export class SceneManager {
 
   addResizeListener(fn) { this._resizeListeners.push(fn); }
   addFrameListener(fn) { this._frameListeners.push(fn); }
+
+  setNavigationConstraint(grid) {
+    this._navigation = grid;
+    this.controls.enableDamping = !grid;
+    this.navigationCheckpoint();
+  }
+
+  navigationCheckpoint() {
+    this._navigationPosition.copy(this.camera.position);
+    this._navigationTarget.copy(this.controls.target);
+  }
+
+  _navigationAllows(from, to) {
+    const source = p => [p.x, -p.y, -p.z];
+    return !this._navigation || this._navigation.isSegmentValid(source(from), source(to));
+  }
 
   // Frame the camera and orbit target to a world-space bounding box.
   frameBounds(box) {
@@ -126,6 +145,12 @@ export class SceneManager {
         this._fpsLast = now;
       }
       this.controls.update();
+      if (!this._navigationAllows(this._navigationPosition, this.camera.position)) {
+        this.camera.position.copy(this._navigationPosition);
+        this.controls.target.copy(this._navigationTarget);
+        this.controls.update();
+      }
+      this.navigationCheckpoint();
       this.renderer.render(this.scene, this.camera);
       for (const fn of this._frameListeners) fn(this.camera);
       this.labelRenderer.render(this.scene, this.camera);
@@ -148,6 +173,7 @@ export class SceneManager {
     const fast = this._keys.has('ShiftLeft') || this._keys.has('ShiftRight');
     if (!this._move.lengthSq()) return;
     this._move.normalize().multiplyScalar(this.moveSpeed * seconds * (fast ? 3 : 1));
+    if (!this._navigationAllows(this.camera.position, this.camera.position.clone().add(this._move))) return;
     this.camera.position.add(this._move);
     this.controls.target.add(this._move);
     this._onCameraMove();

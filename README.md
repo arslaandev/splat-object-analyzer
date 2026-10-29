@@ -96,8 +96,39 @@ switch between them. Processing continues when the browser page is refreshed.
 
 Use **WASD** to move, **Q/E** for down/up, and **Shift** for faster movement.
 Click the scene to focus navigation; drag to look around. Keyboard movement is
-disabled while typing or using menu fields. This is free movement without collision.
+disabled while typing or using menu fields. Movement is unconstrained by default.
 The home button resets the view to an automatically selected camera.
+
+New analyses include a geometry-only camera-space estimate. In Settings →
+**Camera space**, inspect the 2D slice preview or enable **Show grid slice** for a
+3D overlay of candidate space, obstacles,
+unknown cells, and clearance margins. Change the source X/Y/Z slice to inspect
+different heights or orientations. Select a connected region and choose **Enter
+candidate space**, then enable **Constrain camera to candidate space** to test
+WASD, vertical movement, orbit and zoom with continuous grid collision checks.
+Unknown cells block constrained movement. No manual starting pose is needed.
+
+This first version requires sufficient enclosure in the modeled geometry. It
+does not reconstruct missing walls or roofs. Clearance blocks cracks narrower
+than the camera; wider boundary openings remain uncertain. An **Interior uncertain** message means no
+region passed; it is not a failed object analysis. Enclosed furniture cavities
+can also resemble interiors, and grid resolution can obscure narrow gaps. Treat
+the result as a geometric hypothesis for inspection, not certified free space.
+
+Generate navigation for an existing scene without rerunning detection or captions:
+
+```bash
+.venv/bin/python navigation.py --splat /path/to/scene.spz --output ./out_scene_HASH
+```
+
+Use the analysis directory containing that scene's `interactions.json`, then
+restart/refresh the local viewer. Files are `navigation.json` (metadata),
+`navigation-grid.json` (portable RLE grid), and `navigation.npz` (local query data).
+The default grid is capped at two million cells and the camera radius is one
+voxel. CLI options `--resolution 192` and `--camera-radius-voxels 1.5` allow
+experiments; these are source units with unverified metric scale. This CPU stage
+requires NumPy/SciPy and the existing file loader, but no model inference or GPU
+rendering. Full analyses can skip it with `--no-navigation`.
 
 Uploads and analysis run on the machine hosting the viewer. Jobs are saved in
 `outputs/viewer/` (excluded from Git); use `--jobs-dir /path/to/jobs` to change it.

@@ -30,6 +30,8 @@ time.sleep(.35)
 if b'fail' in source.read_bytes():
  print('ValueError: unsupported test scene', flush=True);raise SystemExit(3)
 (out/'interactions.json').write_text(json.dumps({'input':{'path':str(source),'sha256':hashlib.sha256(source.read_bytes()).hexdigest()},'objects':[]}))
+(out/'navigation.json').write_text(json.dumps({'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest()}))
+(out/'navigation-grid.json').write_text(json.dumps({'fixture':'navigation-grid'}))
 ''')
     (root / 'run.sh').write_text('exec ' + shlex.quote(sys.executable) + ' ' + shlex.quote(str(script)) + ' "$@"\n')
     (root / 'scene_understanding.py').write_text('''import argparse,json,time
@@ -90,6 +92,9 @@ out.write_text(json.dumps(dict(source_hash=r['input']['sha256'],shots=[dict(imag
         code, data = request(state['config']['scene']['annotationsUrl'])
         assert code == 200 and data['input']['sha256'] == hashlib.sha256(b'ply\nvalid').hexdigest()
         assert request('/viewer-config.json')[1]['scene']['sourceHash'] == data['input']['sha256']
+        nav_url=state['config']['scene']['navigationUrl']
+        assert request(nav_url)[1] == {'fixture':'navigation-grid'}
+        assert analysis_server.progress_from_line('[navigation] Voxelized 3/10 Gaussians')['stage']=='Estimating camera space'
         assert request('/viewer-config.json', headers={'Host': 'outside.example'})[0] == 403
         assert request('/api/jobs/' + '0'*32)[0] == 404
         code, failed = request('/api/jobs?filename=fail.ply', b'ply\nfail', headers)

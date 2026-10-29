@@ -164,17 +164,26 @@ class Worker:
             # Restarted semantic jobs reuse that checkpoint and their caption cache.
             checkpoint = json.loads(inventory_path.read_text()) if inventory_path.exists() else None
             if not checkpoint or checkpoint.get('input', {}).get('sha256') != record['sha256']:
-                self.command(record, [self.app_root/'run_local.py', '--ply', directory/('source.'+record['format']),
-                    '--quality', record['quality'], '--job_dir', output])
+                arguments = [self.app_root/'run_local.py', '--ply', directory/('source.'+record['format']),
+                    '--quality', record['quality'], '--job_dir', output]
+                if not record.get('navigation', True):
+                    arguments.append('--no-navigation')
+                self.command(record, arguments)
             inventory = json.loads(inventory_path.read_text())
             transforms = json.loads((output/'transforms.json').read_text())
+            navigation = None
+            if record.get('navigation', True):
+                if not all((output/name).is_file() for name in ('navigation.json', 'navigation-grid.json', 'navigation.npz')):
+                    self.command(record, [self.app_root/'navigation.py', '--splat', directory/('source.'+record['format']),
+                        '--output', output])
+                navigation = json.loads((output/'navigation.json').read_text())
             semantic = None
             if record['understanding']:
                 response_path = directory/'semantic.json'
                 self.command(record, [self.app_root/'scene_understanding.py', '--result', inventory_path,
                     '--prompt', '', '--output', response_path])
                 semantic = json.loads(response_path.read_text())
-            result = analysis_result(record, inventory, transforms, semantic)
+            result = analysis_result(record, inventory, transforms, semantic, navigation=navigation)
         else:
             output = self.store.directory(record['analysis_id'])/'analysis'
             response_path = directory/'semantic.json'

@@ -49,11 +49,13 @@ export class SettingsMenu {
             <input type="file" accept=".json,application/json" data-input="json">
           </div>
         </div>
+        <div class="menu navigation-menu" data-navigation></div>
       </div>
       <button class="fab" title="Settings">${GEAR}</button>`;
     document.body.appendChild(root);
 
     this._root = root;
+    this.navigationHost = root.querySelector('[data-navigation]');
     this._panels = root.querySelector(".menu-panels");
     this._exampleSelect = root.querySelector('[data-input="example"]');
     this._statFps = root.querySelector('[data-stat="fps"]');
