@@ -1,5 +1,5 @@
 """Public contracts; source geometry and suggested-camera spaces are explicit."""
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -167,6 +167,73 @@ class Source(Model):
     download_url: str
 
 
+Point3 = Annotated[list[float], Field(min_length=3, max_length=3)]
+
+
+class NavigationRegion(Model):
+    id: int
+    cell_count: int
+    volume_source_units_cubed: float
+    seed: Point3
+    max_clearance: float
+    bounds: dict[str, Point3]
+
+
+class NavigationSummary(Model):
+    schema_version: Literal['1.0'] = '1.0'
+    algorithm: str
+    fingerprint: str
+    source_sha256: str
+    status: Literal['candidate_space', 'uncertain']
+    space: Literal['source'] = 'source'
+    units: Literal['source_scene_units'] = 'source_scene_units'
+    metric_scale_verified: Literal[False] = False
+    origin: Point3
+    shape: list[int] = Field(min_length=3, max_length=3)
+    voxel_size: float = Field(gt=0)
+    camera_radius: float = Field(gt=0)
+    voxel_clearance_margin: float
+    state_codes: dict[str, int]
+    cell_counts: dict[str, int]
+    regions: list[NavigationRegion]
+    settings: dict[str, Any]
+    diagnostics: dict[str, int]
+    seconds: float
+    limitations: list[str]
+    grid_url: str | None = None
+
+
+class NavigationValidationRequest(Model):
+    space: Literal['source'] = 'source'
+    points: list[Point3] = Field(min_length=1, max_length=256)
+
+
+class NavigationGridResult(NavigationSummary):
+    encoding: Literal['rle_xyz_c']
+    runs: list[int]
+
+
+class NavigationValidation(Model):
+    valid: bool
+    reason: str
+    invalid_point_index: int | None = None
+    invalid_segment_index: int | None = None
+    basis: Literal['geometry_candidate_map'] = 'geometry_candidate_map'
+
+
+class NavigationPathRequest(Model):
+    space: Literal['source'] = 'source'
+    start: Point3
+    goal: Point3
+
+
+class NavigationPath(Model):
+    found: bool
+    reason: str
+    points: list[Point3]
+    basis: Literal['geometry_candidate_map'] = 'geometry_candidate_map'
+
+
 class AnalysisResult(Model):
     schema_version: Literal['1.0'] = '1.0'
     analysis_id: str
@@ -175,6 +242,7 @@ class AnalysisResult(Model):
     coordinates: CoordinateSystem = Field(default_factory=CoordinateSystem)
     rendered_view_count: int
     understanding_included: bool
+    navigation: NavigationSummary | None = None
     scene: SceneSummary | None = None
     objects: list[ObjectRecord]
     groups: list[ObjectGroup] = Field(default_factory=list)

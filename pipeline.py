@@ -319,7 +319,7 @@ def run_pipeline(ply_path: str, prompt: str | None, job_dir: str,
         source_hash = hashlib.file_digest(f, 'sha256').hexdigest()
 
     print("[pipeline] Step 1: Rendering camera views …")
-    transforms_path = render_cameras.render_views(ply_path, str(job_dir), cfg)
+    transforms_path = render_cameras.render_views(ply_path, str(job_dir), cfg, source_hash=source_hash)
 
     with open(transforms_path) as f:
         transforms = json.load(f)
@@ -410,6 +410,7 @@ def run_pipeline(ply_path: str, prompt: str | None, job_dir: str,
         'input': {'path': str(source), 'sha256': source_hash},
         'coordinate_system': {'units': 'source_scene_units', 'metric_scale_verified': False},
         'camera_placement': transforms.get('camera_placement', 'upstream_density_sampler'),
+        'navigation': transforms.get('navigation'),
         'detection_nms_iou': 0.5,
         'discovery': discovery,
         'settings': vars(cfg),

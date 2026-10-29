@@ -92,6 +92,16 @@
               "default": true,
               "title": "Understanding"
             }
+          },
+          {
+            "name": "navigation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Navigation"
+            }
           }
         ],
         "responses": {
@@ -368,6 +378,539 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AnalysisResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
+    "/v1/analyses/{analysis_id}/navigation": {
+      "get": {
+        "tags": [
+          "navigation"
+        ],
+        "summary": "Navigation Summary",
+        "operationId": "navigation_summary_v1_analyses__analysis_id__navigation_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{32}$",
+              "title": "Analysis Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NavigationSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
+    "/v1/analyses/{analysis_id}/navigation/grid": {
+      "get": {
+        "tags": [
+          "navigation"
+        ],
+        "summary": "Navigation Grid",
+        "description": "Full candidate map as JSON. runs contains alternating state and count values in C-order with shape [nx,ny,nz]; z varies fastest. Cell centers are origin+(index+0.5)*voxel_size.",
+        "operationId": "navigation_grid_v1_analyses__analysis_id__navigation_grid_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{32}$",
+              "title": "Analysis Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NavigationGridResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
+    "/v1/analyses/{analysis_id}/navigation/validate": {
+      "post": {
+        "tags": [
+          "navigation"
+        ],
+        "summary": "Validate Navigation",
+        "operationId": "validate_navigation_v1_analyses__analysis_id__navigation_validate_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{32}$",
+              "title": "Analysis Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NavigationValidationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NavigationValidation"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        }
+      }
+    },
+    "/v1/analyses/{analysis_id}/navigation/path": {
+      "post": {
+        "tags": [
+          "navigation"
+        ],
+        "summary": "Plan Navigation",
+        "operationId": "plan_navigation_v1_analyses__analysis_id__navigation_path_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{32}$",
+              "title": "Analysis Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NavigationPathRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NavigationPath"
                 }
               }
             }
@@ -1021,6 +1564,16 @@
             "type": "boolean",
             "title": "Understanding Included"
           },
+          "navigation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NavigationSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "scene": {
             "anyOf": [
               {
@@ -1410,6 +1963,534 @@
           "result_url"
         ],
         "title": "Job"
+      },
+      "NavigationGridResult": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "algorithm": {
+            "type": "string",
+            "title": "Algorithm"
+          },
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint"
+          },
+          "source_sha256": {
+            "type": "string",
+            "title": "Source Sha256"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "candidate_space",
+              "uncertain"
+            ],
+            "title": "Status"
+          },
+          "space": {
+            "type": "string",
+            "const": "source",
+            "title": "Space",
+            "default": "source"
+          },
+          "units": {
+            "type": "string",
+            "const": "source_scene_units",
+            "title": "Units",
+            "default": "source_scene_units"
+          },
+          "metric_scale_verified": {
+            "type": "boolean",
+            "const": false,
+            "title": "Metric Scale Verified",
+            "default": false
+          },
+          "origin": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Origin"
+          },
+          "shape": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Shape"
+          },
+          "voxel_size": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Voxel Size"
+          },
+          "camera_radius": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Camera Radius"
+          },
+          "voxel_clearance_margin": {
+            "type": "number",
+            "title": "Voxel Clearance Margin"
+          },
+          "state_codes": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "State Codes"
+          },
+          "cell_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Cell Counts"
+          },
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/NavigationRegion"
+            },
+            "type": "array",
+            "title": "Regions"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Settings"
+          },
+          "diagnostics": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Diagnostics"
+          },
+          "seconds": {
+            "type": "number",
+            "title": "Seconds"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Limitations"
+          },
+          "grid_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grid Url"
+          },
+          "encoding": {
+            "type": "string",
+            "const": "rle_xyz_c",
+            "title": "Encoding"
+          },
+          "runs": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Runs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "algorithm",
+          "fingerprint",
+          "source_sha256",
+          "status",
+          "origin",
+          "shape",
+          "voxel_size",
+          "camera_radius",
+          "voxel_clearance_margin",
+          "state_codes",
+          "cell_counts",
+          "regions",
+          "settings",
+          "diagnostics",
+          "seconds",
+          "limitations",
+          "encoding",
+          "runs"
+        ],
+        "title": "NavigationGridResult"
+      },
+      "NavigationPath": {
+        "properties": {
+          "found": {
+            "type": "boolean",
+            "title": "Found"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "points": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array",
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "type": "array",
+            "title": "Points"
+          },
+          "basis": {
+            "type": "string",
+            "const": "geometry_candidate_map",
+            "title": "Basis",
+            "default": "geometry_candidate_map"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "found",
+          "reason",
+          "points"
+        ],
+        "title": "NavigationPath"
+      },
+      "NavigationPathRequest": {
+        "properties": {
+          "space": {
+            "type": "string",
+            "const": "source",
+            "title": "Space",
+            "default": "source"
+          },
+          "start": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Start"
+          },
+          "goal": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Goal"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "start",
+          "goal"
+        ],
+        "title": "NavigationPathRequest"
+      },
+      "NavigationRegion": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "cell_count": {
+            "type": "integer",
+            "title": "Cell Count"
+          },
+          "volume_source_units_cubed": {
+            "type": "number",
+            "title": "Volume Source Units Cubed"
+          },
+          "seed": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Seed"
+          },
+          "max_clearance": {
+            "type": "number",
+            "title": "Max Clearance"
+          },
+          "bounds": {
+            "additionalProperties": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array",
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "type": "object",
+            "title": "Bounds"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "cell_count",
+          "volume_source_units_cubed",
+          "seed",
+          "max_clearance",
+          "bounds"
+        ],
+        "title": "NavigationRegion"
+      },
+      "NavigationSummary": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "algorithm": {
+            "type": "string",
+            "title": "Algorithm"
+          },
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint"
+          },
+          "source_sha256": {
+            "type": "string",
+            "title": "Source Sha256"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "candidate_space",
+              "uncertain"
+            ],
+            "title": "Status"
+          },
+          "space": {
+            "type": "string",
+            "const": "source",
+            "title": "Space",
+            "default": "source"
+          },
+          "units": {
+            "type": "string",
+            "const": "source_scene_units",
+            "title": "Units",
+            "default": "source_scene_units"
+          },
+          "metric_scale_verified": {
+            "type": "boolean",
+            "const": false,
+            "title": "Metric Scale Verified",
+            "default": false
+          },
+          "origin": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Origin"
+          },
+          "shape": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Shape"
+          },
+          "voxel_size": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Voxel Size"
+          },
+          "camera_radius": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Camera Radius"
+          },
+          "voxel_clearance_margin": {
+            "type": "number",
+            "title": "Voxel Clearance Margin"
+          },
+          "state_codes": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "State Codes"
+          },
+          "cell_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Cell Counts"
+          },
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/NavigationRegion"
+            },
+            "type": "array",
+            "title": "Regions"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Settings"
+          },
+          "diagnostics": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Diagnostics"
+          },
+          "seconds": {
+            "type": "number",
+            "title": "Seconds"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Limitations"
+          },
+          "grid_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grid Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "algorithm",
+          "fingerprint",
+          "source_sha256",
+          "status",
+          "origin",
+          "shape",
+          "voxel_size",
+          "camera_radius",
+          "voxel_clearance_margin",
+          "state_codes",
+          "cell_counts",
+          "regions",
+          "settings",
+          "diagnostics",
+          "seconds",
+          "limitations"
+        ],
+        "title": "NavigationSummary"
+      },
+      "NavigationValidation": {
+        "properties": {
+          "valid": {
+            "type": "boolean",
+            "title": "Valid"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "invalid_point_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invalid Point Index"
+          },
+          "invalid_segment_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invalid Segment Index"
+          },
+          "basis": {
+            "type": "string",
+            "const": "geometry_candidate_map",
+            "title": "Basis",
+            "default": "geometry_candidate_map"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "valid",
+          "reason"
+        ],
+        "title": "NavigationValidation"
+      },
+      "NavigationValidationRequest": {
+        "properties": {
+          "space": {
+            "type": "string",
+            "const": "source",
+            "title": "Space",
+            "default": "source"
+          },
+          "points": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array",
+              "maxItems": 3,
+              "minItems": 3
+            },
+            "type": "array",
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Points"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "points"
+        ],
+        "title": "NavigationValidationRequest"
       },
       "ObjectGroup": {
         "properties": {

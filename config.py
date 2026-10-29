@@ -43,6 +43,10 @@ class PipelineConfig:
     preview_size: int = 128
     seed: int = 42                          # deterministic placement
 
+    # Geometry-only navigation estimate; independent of view-count quality.
+    navigation: bool = True
+    navigation_resolution: int = 128
+
     # ── detection / clustering ─────────────────────────────────────────────
     score_threshold: float = 0.12
     min_votes: int = 8

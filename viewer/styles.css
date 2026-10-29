@@ -240,6 +240,9 @@ button:disabled, select:disabled { opacity: .55; cursor: wait; }
   width: 260px;
   display: flex;
   flex-direction: column;
+  max-height: calc(100vh - 200px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   gap: 8px;
   opacity: 0;
   transform: translateY(8px);
@@ -355,6 +358,16 @@ button:disabled, select:disabled { opacity: .55; cursor: wait; }
   z-index: 10;
 }
 #reset-view { position: fixed; left: 124px; bottom: 20px; z-index: 10; font-size: 24px; }
+
+.navigation-menu { max-width: 320px; }
+.navigation-menu p { font-size: 12px; line-height: 1.5; margin: 8px 0 12px; }
+.navigation-menu .navigation-check { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12px; }
+.navigation-menu input[type="range"] { width: 100%; }
+.navigation-menu button { color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px; cursor: pointer; }
+.navigation-menu button:disabled { opacity: .5; cursor: default; }
+.navigation-menu [data-map-preview] { display: block; width: 100%; max-height: 200px; object-fit: contain; image-rendering: pixelated; }
+.navigation-legend, .navigation-note { font-size: 11px; line-height: 1.5; }
+.nav-free { color: #52d6a5; } .nav-occupied { color: #e98282; } .nav-unknown { color: #a7b4c3; } .nav-clearance { color: #e2be72; }
 
 /* Scene understanding stays separate from the upload/progress card. */
 #scene-understanding { position: fixed; top: 16px; right: 16px; z-index: 15; width: min(360px, calc(100vw - 32px)); max-height: calc(100vh - 88px); overflow: auto; border: 1px solid #29384a; border-radius: 12px; background: rgba(12,16,24,.96); box-shadow: 0 8px 30px #0006; font-size: 13px; }

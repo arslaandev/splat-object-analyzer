@@ -27,6 +27,7 @@ def main():
                    help='Optional comma-separated labels; omit to discover objects automatically')
     p.add_argument("--quality", choices=list(QUALITY_PRESETS.keys()), default=DEFAULT_QUALITY,
                    help="Camera-coverage preset (controls number of views)")
+    p.add_argument('--no-navigation', action='store_true', help='Skip the geometry-only camera-space estimate')
     p.add_argument("--job_dir", default=None, help="Output directory (default: ./out_<name>_<sha256-prefix>)")
     p.add_argument("--score_threshold", type=float, default=d.score_threshold)
     p.add_argument("--min_votes",       type=int,   default=d.min_votes)
@@ -46,6 +47,7 @@ def main():
     job_dir = str(Path(args.job_dir or f"out_{Path(args.ply).stem}_{fingerprint}").expanduser().resolve())
     cfg = PipelineConfig.from_overrides(
         quality=args.quality,
+        navigation=not args.no_navigation,
         score_threshold=args.score_threshold,
         min_votes=args.min_votes,
         min_peak_score=args.min_peak_score,

@@ -9,11 +9,13 @@ def views(response, analysis_id):
         for v in response.get('shots', [])]
 
 
-def analysis_result(record, inventory, transforms, semantic=None):
+def analysis_result(record, inventory, transforms, semantic=None, navigation=None):
     if inventory['input']['sha256'] != record['sha256']:
         raise ValueError('Inventory source fingerprint mismatch')
     if semantic and semantic['source_hash'] != record['sha256']:
         raise ValueError('Scene understanding source fingerprint mismatch')
+    if navigation and navigation['source_sha256'] != record['sha256']:
+        raise ValueError('Navigation source fingerprint mismatch')
     index = semantic.get('understanding', {}) if semantic else {}
     descriptions = {o['id']:o for o in index.get('objects', [])}
     objects = []
@@ -39,6 +41,7 @@ def analysis_result(record, inventory, transforms, semantic=None):
         source=dict(filename=record['filename'], format=record['format'], bytes=record['bytes'], sha256=record['sha256'],
                     download_url=f'/v1/analyses/{record["id"]}/source'),
         rendered_view_count=len(transforms['frames']), understanding_included=semantic is not None,
+        navigation={**navigation, 'grid_url':f'/v1/analyses/{record["id"]}/navigation/grid'} if navigation else None,
         scene={k:index['scene'][k] for k in ('type','description','confidence')} if index.get('scene') else None,
         objects=objects, groups=index.get('groups', []), relations=relations, hero_object_ids=index.get('hero_object_ids', []),
         default_selection=semantic.get('selection') if semantic else None, suggested_views=views(semantic or {}, record['id']),

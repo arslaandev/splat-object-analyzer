@@ -35,6 +35,11 @@ def make_config(result, result_path, scene, prefix=''):
     config = {'splatUrl': prefix + '/scene' + scene.suffix.lower(),
               'annotationsUrl': prefix + '/interactions.json', 'name': scene.name,
               'sourceHash': result['input']['sha256'], 'sceneId': prefix.rsplit('/', 1)[-1] if prefix else 'initial'}
+    navigation_path = result_path.parent / 'navigation.json'
+    if navigation_path.is_file() and (result_path.parent/'navigation-grid.json').is_file():
+        metadata = json.loads(navigation_path.read_text())
+        if metadata.get('source_sha256') == result['input']['sha256']:
+            config['navigationUrl'] = prefix + '/navigation-grid.json'
     transforms_path = result_path.parent / 'transforms.json'
     if transforms_path.exists():
         transforms = json.loads(transforms_path.read_text())
@@ -289,19 +294,19 @@ def handler_for(jobs, port):
                     self.send_header('Content-Length', str(path.stat().st_size))
                     self.end_headers()
                     return content
-                match = re.fullmatch(r'/api/jobs/([a-f0-9]{32})/(scene\.(?:ply|spz)|interactions\.json)', route)
+                match = re.fullmatch(r'/api/jobs/([a-f0-9]{32})/(scene\.(?:ply|spz)|interactions\.json|navigation-grid\.json)', route)
                 pair = jobs.initial
                 if match:
                     job = jobs.jobs.get(match[1])
                     if not job:
                         self.send_error(404)
                         return None
-                    path = job['source'] if match[2].startswith('scene.') else job['output'] / 'interactions.json'
+                    path = job['source'] if match[2].startswith('scene.') else job['output'] / match[2]
                     if match[2].startswith('scene.') and match[2] != 'scene' + path.suffix:
                         self.send_error(404)
                         return None
-                elif pair and route in {'/scene' + pair[2].suffix.lower(), '/interactions.json'}:
-                    path = pair[2] if route.startswith('/scene') else pair[1]
+                elif pair and route in {'/scene' + pair[2].suffix.lower(), '/interactions.json', '/navigation-grid.json'}:
+                    path = pair[2] if route.startswith('/scene') else pair[1] if route == '/interactions.json' else pair[1].parent/'navigation-grid.json'
                 else:
                     return super().send_head()
                 if not path.is_file():

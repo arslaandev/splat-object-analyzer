@@ -3,7 +3,9 @@ import re
 
 
 def progress_from_line(line):
-    if '[render]' in line or '[pipeline] Step 1' in line or '[spz]' in line:
+    if '[navigation]' in line:
+        stage = 'Estimating camera space'
+    elif '[render]' in line or '[pipeline] Step 1' in line or '[spz]' in line:
         stage = 'Selecting and rendering views'
     elif '[discover]' in line:
         stage = 'Discovering object names'

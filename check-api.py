@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory() as temporary:
     program = root/'program'; program.mkdir()
     (program/'run_local.py').write_text('''import argparse,hashlib,json,time
 from pathlib import Path
-p=argparse.ArgumentParser();p.add_argument('--ply');p.add_argument('--quality');p.add_argument('--job_dir');a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--ply');p.add_argument('--quality');p.add_argument('--job_dir');p.add_argument('--no-navigation',action='store_true');a=p.parse_args()
 out=Path(a.job_dir);out.mkdir(exist_ok=True);source=Path(a.ply);content=source.read_bytes()
 with (out/'pipeline-runs.txt').open('a') as log:log.write('run\\n')
 print('[detect] Processed 1/2 views',flush=True)
@@ -62,6 +62,18 @@ objects=[dict(**o,category=o['label'],display_name='wooden desk',status='support
 selection=dict(interpretation=a.prompt or 'Tour',object_ids=[] if 'piano' in a.prompt else ['object_0001'],group_ids=[],message='No matching subjects' if 'piano' in a.prompt else '')
 shots=[dict(id='view_1',title='Subject overview',frame_idx=0,object_ids=['object_0001'],subjects=['wooden desk'],score=.9,camera=dict(position=[1,-2,-3],target=[1,-2,-2],fov=90),basis='existing_render_with_depth_visibility_check')] if selection['object_ids'] else []
 out.write_text(json.dumps(dict(source_hash=r['input']['sha256'],selection=selection,shots=shots,unshown_object_ids=[],understanding=dict(objects=objects,groups=[],relations=[],hero_object_ids=['object_0001'],scene=dict(type='study',description='A workspace.',confidence='medium'),limitations=['Inferred descriptions']))))
+''')
+    (program/'navigation.py').write_text('import sys\nsys.path.insert(0, '+repr(str(Path(__file__).resolve().parent))+')\n'+'''import argparse,hashlib
+from pathlib import Path
+import numpy as np
+from scipy import ndimage
+from navigation import build_navigation,NavigationConfig
+p=argparse.ArgumentParser();p.add_argument('--splat');p.add_argument('--output');a=p.parse_args()
+inside=np.zeros((24,24,24),dtype=bool);inside[4:20,4:20,4:20]=True
+walls=ndimage.binary_dilation(inside,structure=np.ones((3,3,3))) & ~inside
+means=np.array(np.nonzero(walls)).T.astype(float)+.5
+arrays=dict(means=means,scales=np.full_like(means,np.log(.6)),quats=np.tile([1.,0,0,0],(len(means),1)),opacities=np.full(len(means),5.))
+build_navigation(arrays,a.output,hashlib.sha256(Path(a.splat).read_bytes()).hexdigest(),NavigationConfig(resolution=32))
 ''')
     settings = Settings(root/'data', KEY, max_upload_bytes=512, cors_origins=('https://app.example.com',))
     app = create_app(settings, program)
@@ -93,6 +105,25 @@ out.write_text(json.dumps(dict(source_hash=r['input']['sha256'],selection=select
         assert data['suggested_views'][0]['camera']['space']=='viewer'
         assert data['suggested_views'][0]['camera']['position']==[1,-2,-3]
         assert data['coordinates']['metric_scale_verified'] is False
+        navigation=data['navigation']
+        assert navigation['status']=='candidate_space' and navigation['space']=='source'
+        assert navigation['source_sha256']==data['source']['sha256']
+        nav_url='/v1/analyses/'+analysis_id+'/navigation'
+        assert client.get(nav_url).status_code==401
+        assert client.get(nav_url,headers=AUTH).json()['fingerprint']==navigation['fingerprint']
+        grid=client.get(navigation['grid_url'],headers=AUTH).json()
+        assert grid['encoding']=='rle_xyz_c' and sum(grid['runs'][1::2])==__import__('math').prod(grid['shape'])
+        seed=navigation['regions'][0]['seed']
+        validation=client.post(nav_url+'/validate',json={'points':[seed]},headers=AUTH)
+        assert validation.status_code==200 and validation.json()['valid'], validation.text
+        rejected=client.post(nav_url+'/validate',json={'points':[navigation['origin']]},headers=AUTH)
+        assert rejected.status_code==200 and not rejected.json()['valid']
+        assert client.post(nav_url+'/validate',json={'points':[[0,0]]},headers=AUTH).status_code==422
+        assert client.post(nav_url+'/validate',json={'points':[seed],'space':'viewer'},headers=AUTH).status_code==422
+        planned=client.post(nav_url+'/path',json={'start':seed,'goal':seed},headers=AUTH)
+        assert planned.status_code==200 and planned.json()['found'], planned.text
+        absent_path=client.post(nav_url+'/path',json={'start':seed,'goal':navigation['origin']},headers=AUTH)
+        assert absent_path.status_code==200 and not absent_path.json()['found']
         assert str(root) not in result.text, 'Internal filesystem paths leaked into public results'
         image=client.get(data['suggested_views'][0]['image_url'],headers=HEADERS)
         assert image.status_code==200 and image.headers['Content-Type']=='image/png'
@@ -122,9 +153,11 @@ out.write_text(json.dumps(dict(source_hash=r['input']['sha256'],selection=select
         spz=client.post('/v1/analyses?filename=room.spz',content=b'\x1f\x8bfixture',headers=HEADERS).json()
         assert wait(client,spz['id'])['status']=='succeeded'
         assert client.get(spz['result_url'],headers=HEADERS).json()['source']['format']=='spz'
-        fast=client.post('/v1/analyses?filename=fast.ply&understanding=false',content=b'ply\nvalid',headers=HEADERS).json()
+        fast=client.post('/v1/analyses?filename=fast.ply&understanding=false&navigation=false',content=b'ply\nvalid',headers=HEADERS).json()
         assert wait(client,fast['id'])['status']=='succeeded'
         assert client.get(fast['result_url'],headers=HEADERS).json()['understanding_included'] is False
+        assert client.get(fast['result_url'],headers=HEADERS).json()['navigation'] is None
+        assert client.get('/v1/analyses/'+fast['id']+'/navigation',headers=AUTH).status_code==404
         assert client.post('/v1/analyses/'+fast['id']+'/queries',json={'prompt':'desk'},headers=AUTH).status_code==409
         cors=client.options('/v1/analyses',headers={'Origin':'https://app.example.com','Access-Control-Request-Method':'POST','Access-Control-Request-Headers':'Authorization,Content-Type'})
         assert cors.headers['Access-Control-Allow-Origin']=='https://app.example.com'
